@@ -16,9 +16,6 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     api_key: str | None = Field(default=None, alias="API_KEY")
     registration_api_key: str | None = Field(default=None, alias="REGISTRATION_API_KEY")
-    create_tables_on_startup: bool = Field(
-        default=True, alias="CREATE_TABLES_ON_STARTUP"
-    )
     logo_inverted: bool = Field(default=False, alias="LOGO_INVERTED")
 
     postgres_db: str = Field(default="makerspace_access", alias="POSTGRES_DB")
