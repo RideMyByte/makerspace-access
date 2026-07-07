@@ -14,7 +14,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - ${POSTGRES_DATA_PATH:-./postgres/data}:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     networks:
       - backend
     healthcheck:
@@ -98,6 +99,7 @@ services:
       start_period: 10s
 
 volumes:
+  postgres_data:
   nginx_cache:
   nginx_logs:
 
