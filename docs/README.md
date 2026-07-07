@@ -1,9 +1,11 @@
-# Docs
+# Documentation
 
-Design docs, runbooks, and operational procedures.
+This directory contains project documentation, including design documents, user guides, and API references.
 
-Next steps:
+## Structure
 
-- Add architecture overview
-- Add runbooks for on-call responders
-- Add security and compliance notes
+- **[placeholder for subdirectory name]**: [placeholder for description]
+
+## Contributing
+
+[placeholder for contribution guidelines]

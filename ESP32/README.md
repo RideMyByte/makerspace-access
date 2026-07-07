@@ -1,9 +1,15 @@
 # ESP32
 
-Firmware and examples for ESP32-based door controllers.
+This directory contains code and configurations related to the ESP32 microcontroller.
 
-Next steps:
+## Sub-projects
 
-- Add example firmware using ESP-IDF or Arduino
-- Provide wiring diagrams for locks, relays, and sensors
-- Add OTA update instructions and provisioning steps
+- **[placeholder for sub-project name]**: [placeholder for description]
+
+## Usage
+
+[placeholder for usage instructions]
+
+## Contributing
+
+[placeholder for contribution guidelines]
