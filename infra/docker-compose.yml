@@ -4,7 +4,9 @@
 services:
   # PostgreSQL stores the core business data for users, permissions, devices, and access events.
   postgres:
-    image: postgres:16.4-alpine
+    build:
+      context: ./postgres
+    image: ${POSTGRES_IMAGE:-makerspace-access-postgres:latest}
     container_name: ${COMPOSE_PROJECT_NAME:-makerspace-access}_postgres
     restart: unless-stopped
     environment:
@@ -13,7 +15,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     networks:
       - backend
     healthcheck:
