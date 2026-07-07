@@ -21,8 +21,7 @@ def get_session_factory() -> sessionmaker[Session]:
 
 def create_database_tables() -> None:
     engine = get_engine()
-    # Drop all tables to start fresh (prototype phase)
-    Base.metadata.drop_all(bind=engine)
+    # Create tables if they don't exist (idempotent – does not drop existing data)
     Base.metadata.create_all(bind=engine)
 
 
