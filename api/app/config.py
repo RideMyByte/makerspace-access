@@ -1,0 +1,45 @@
+from functools import lru_cache
+from typing import ClassVar
+
+from pydantic import Field, computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_file=None, extra="ignore"
+    )
+
+    app_name: str = "Makerspace Access API"
+    api_v1_prefix: str = "/api/v1"
+    api_key: str | None = Field(default=None, alias="API_KEY")
+    registration_api_key: str | None = Field(default=None, alias="REGISTRATION_API_KEY")
+    create_tables_on_startup: bool = Field(
+        default=True, alias="CREATE_TABLES_ON_STARTUP"
+    )
+    logo_inverted: bool = Field(default=False, alias="LOGO_INVERTED")
+
+    postgres_db: str = Field(default="makerspace_access", alias="POSTGRES_DB")
+    postgres_user: str = Field(default="makerspace", alias="POSTGRES_USER")
+    postgres_password: str = Field(default="change-me", alias="POSTGRES_PASSWORD")
+    postgres_host: str = Field(default="postgres", alias="POSTGRES_HOST")
+    postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
+    database_url: str | None = Field(default=None, alias="DATABASE_URL")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def sqlalchemy_database_url(self) -> str:
+        if self.database_url:
+            return self.database_url
+
+        return (
+            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

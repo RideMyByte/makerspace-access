@@ -1,0 +1,10 @@
+{
+  "include": ["api/app"],
+  "exclude": [
+    "**/__pycache__",
+    "api/.venv"
+  ],
+  "venvPath": "api",
+  "venv": ".venv",
+  "pythonVersion": "3.12"
+}

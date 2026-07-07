@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MakerSpace – Registrierung</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div class="header-left">
+        <img src="https://halle1wh.de/content/images/2023/04/cropped-RZ_Halle1_Logo_2018_schwarz-e1540384559756-2-150x150-1.png" alt="Logo" class="logo" />
+        <h1>MakerSpace – Registrierung</h1>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card full-width">
+        <h2>Neues Mitglied registrieren</h2>
+        <form id="registerForm" class="grid-form">
+          <label>Vorname <input name="first_name" required /></label>
+          <label>Nachname <input name="last_name" required /></label>
+          <label>Kontakt <input name="email" placeholder="Mail, Telefon..." /></label>
+          <label>Postleitzahl <input name="postal_code" /></label>
+          <label>Geburtstag <input name="birthday" type="date" /></label>
+          <label>Kategorie
+            <select name="category">
+              <option value="buerger">Bürger*in</option>
+              <option value="schueler">Schüler*in</option>
+              <option value="student">Student*in</option>
+              <option value="unternehmen">Unternehmen</option>
+              <option value="verein">Verein</option>
+              <option value="oeffentlich">Öffentliche Einrichtung</option>
+            </select>
+          </label>
+          <div class="full-width">
+            <label>NFC-IDs <small>(optional, bis zu 10)</small>
+              <textarea name="nfc_ids" rows="3" placeholder="04AABBCCDD&#10;04EEFF0011"></textarea>
+            </label>
+          </div>
+          <label class="checkbox"><input name="is_makerstaff" type="checkbox" /> MakerSpace Mitarbeiter*in</label>
+          <label class="checkbox"><input name="safety_briefed" type="checkbox" checked /> Grundunterwiesen (heute)</label>
+          <div class="full-width">
+            <label>Registrierungs-API-Key
+              <input id="regApiKey" type="password" placeholder="Registrierungs-Token" autocomplete="off" />
+            </label>
+          </div>
+          <button type="submit" class="btn-primary">Registrieren</button>
+        </form>
+      </section>
+    </main>
+
+    <footer class="page-footer">
+      <p>Mit <span class="heart">&hearts;</span> vide-coded in <a href="https://halle1wh.de" target="_blank" rel="noopener">Halle1</a></p>
+    </footer>
+
+    <div id="message" class="message" role="status"></div>
+    <script src="/static/register.js" defer></script>
+  </body>
+</html>

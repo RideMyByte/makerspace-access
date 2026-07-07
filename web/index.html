@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="de">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>MakerSpace Access Admin</title>
+        <link rel="stylesheet" href="/static/styles.css" />
+    </head>
+    <body>
+        <header class="page-header">
+            <div class="header-left">
+                <img
+                    src="https://halle1wh.de/content/images/2023/04/cropped-RZ_Halle1_Logo_2018_schwarz-e1540384559756-2-150x150-1.png"
+                    alt="Logo"
+                    class="logo"
+                    id="mainLogo"
+                />
+                <h1>MakerSpace Access</h1>
+            </div>
+            <div class="header-right">
+                <label class="api-key-field">
+                    API-Key
+                    <input
+                        id="apiKey"
+                        type="password"
+                        placeholder="Admin API-Key"
+                        autocomplete="off"
+                    />
+                </label>
+                <button
+                    id="openRegisterBtn"
+                    type="button"
+                    class="btn-primary register-header-btn"
+                >
+                    Mitglied registrieren
+                </button>
+            </div>
+        </header>
+
+        <main class="layout">
+            <section class="card full-width">
+                <div class="section-header">
+                    <h2>Anwesende</h2>
+                </div>
+                <div id="presentMembers" class="table-wrap"></div>
+                <div class="bulk-safety-bar">
+                    <button id="bulkSafetyBtn" type="button" disabled>
+                        Grundunterweisung durchgeführt
+                    </button>
+                </div>
+                <details class="nfc-history">
+                    <summary>
+                        Letzte NFC-Scans <span id="nfcHistoryCount">0</span>
+                    </summary>
+                    <div id="nfcHistory"></div>
+                </details>
+            </section>
+
+            <section class="card full-width" id="statsCard">
+                <h2>Statistiken</h2>
+                <div class="stats-grid">
+                    <div class="stat-block highlight">
+                        <strong>Aktuell anwesend</strong>
+                        <span class="stat-big" id="statPresentNow">0</span>
+                    </div>
+                    <div class="stat-block highlight">
+                        <strong>Besuche heute</strong>
+                        <span class="stat-big" id="statVisitsToday">0</span>
+                    </div>
+                    <div class="stat-block">
+                        <strong>Grundunterweisung</strong>
+                        <span>Total: <span id="statSafetyTotal">0</span></span>
+                        <span
+                            >Letzte 6 Monate:
+                            <span id="statSafetyRecent">0</span></span
+                        >
+                        <span
+                            >Abgelaufen:
+                            <span id="statSafetyExpired">0</span></span
+                        >
+                    </div>
+                    <div class="stat-block">
+                        <strong>Anwesenheit</strong>
+                        <span>Heute: <span id="statPresentToday">0</span></span>
+                        <span
+                            >Diese Woche:
+                            <span id="statPresentWeek">0</span></span
+                        >
+                    </div>
+                    <div class="stat-block">
+                        <strong>Besuche</strong>
+                        <span
+                            >Diese Woche:
+                            <span id="statVisitsWeek">0</span></span
+                        >
+                        <span>Total: <span id="statVisitsTotal">0</span></span>
+                    </div>
+                    <div class="stat-block">
+                        <strong>Mitglieder</strong>
+                        <span>Total: <span id="statMembersTotal">0</span></span>
+                        <span
+                            >MakerSpace-Team:
+                            <span id="statMakerstaff">0</span></span
+                        >
+                    </div>
+                </div>
+            </section>
+
+            <section class="card full-width">
+                <div class="section-header">
+                    <h2>Alle Mitglieder</h2>
+                    <div class="search-bar">
+                        <input
+                            id="searchInput"
+                            type="search"
+                            placeholder="Suche Name, ID, NFC-ID..."
+                        />
+                        <select id="filterLastVisit">
+                            <option value="">Alle</option>
+                            <option value="week">Letzte Woche</option>
+                            <option value="month">Letzter Monat</option>
+                            <option value="halfyear">Letztes Halbjahr</option>
+                            <option value="year">Letztes Jahr</option>
+                        </select>
+                        <button id="searchBtn" type="button">Suchen</button>
+                    </div>
+                </div>
+                <div id="memberList" class="table-wrap"></div>
+            </section>
+        </main>
+
+        <footer class="page-footer">
+            <p>
+                Mit <span class="heart">&hearts;</span> vide-coded in
+                <a href="https://halle1wh.de" target="_blank" rel="noopener"
+                    >Halle1</a
+                >
+            </p>
+        </footer>
+
+        <div id="editorModal" class="modal-overlay" style="display: none">
+            <div class="modal-content card">
+                <div class="section-header">
+                    <h2>Mitglied bearbeiten</h2>
+                    <button id="closeEditor" type="button" class="close-btn">
+                        &times;
+                    </button>
+                </div>
+                <form id="editMemberForm" class="grid-form">
+                    <input name="id" type="hidden" />
+                    <label>Vorname <input name="first_name" required /></label>
+                    <label>Nachname <input name="last_name" required /></label>
+                    <label
+                        >Kontakt
+                        <input name="email" placeholder="Mail, Telefon..."
+                    /></label>
+                    <label>Postleitzahl <input name="postal_code" /></label>
+                    <label
+                        >Geburtstag <input name="birthday" type="date"
+                    /></label>
+                    <label
+                        >Kategorie
+                        <select name="category">
+                            <option value="buerger">Bürger*in</option>
+                            <option value="schueler">Schüler*in</option>
+                            <option value="student">Student*in</option>
+                            <option value="unternehmen">Unternehmen</option>
+                            <option value="verein">Verein</option>
+                            <option value="oeffentlich">
+                                Öffentliche Einrichtung
+                            </option>
+                            <option value="mitarbeiter">Mitarbeiter*in</option>
+                        </select>
+                    </label>
+                    <label
+                        >Letzte Grundunterweisung
+                        <input name="last_safety_briefing" type="date"
+                    /></label>
+                    <label class="checkbox"
+                        ><input name="is_makerstaff" type="checkbox" />
+                        MakerSpace Mitarbeiter*in</label
+                    >
+                    <div class="full-width">
+                        <label
+                            >NFC-IDs <small>(eine pro Zeile)</small>
+                            <textarea
+                                name="nfc_ids"
+                                rows="5"
+                                placeholder="04AABBCCDD&#10;04EEFF0011"
+                            ></textarea>
+                        </label>
+                    </div>
+                    <div class="btn-group">
+                        <button type="submit">Speichern</button>
+                        <button
+                            id="deleteMemberBtn"
+                            type="button"
+                            class="btn-danger"
+                        >
+                            Löschen
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="registerModal" class="modal-overlay" style="display: none">
+            <div class="modal-content card">
+                <div class="section-header">
+                    <h2>Neues Mitglied registrieren</h2>
+                    <button id="closeRegister" type="button" class="close-btn">
+                        &times;
+                    </button>
+                </div>
+                <form id="registerForm" class="grid-form">
+                    <label>Vorname <input name="first_name" required /></label>
+                    <label>Nachname <input name="last_name" required /></label>
+                    <label
+                        >Kontakt
+                        <input name="email" placeholder="Mail, Telefon..."
+                    /></label>
+                    <label>Postleitzahl <input name="postal_code" /></label>
+                    <label
+                        >Geburtstag <input name="birthday" type="date"
+                    /></label>
+                    <label
+                        >Kategorie
+                        <select name="category">
+                            <option value="buerger">Bürger*in</option>
+                            <option value="schueler">Schüler*in</option>
+                            <option value="student">Student*in</option>
+                            <option value="unternehmen">Unternehmen</option>
+                            <option value="verein">Verein</option>
+                            <option value="oeffentlich">
+                                Öffentliche Einrichtung
+                            </option>
+                            <option value="mitarbeiter">Mitarbeiter*in</option>
+                        </select>
+                    </label>
+                    <div class="full-width">
+                        <label
+                            >NFC-IDs <small>(optional, bis zu 10)</small>
+                            <textarea
+                                name="nfc_ids"
+                                rows="3"
+                                placeholder="04AABBCCDD&#10;04EEFF0011"
+                            ></textarea>
+                        </label>
+                    </div>
+                    <label class="checkbox"
+                        ><input name="is_makerstaff" type="checkbox" />
+                        MakerSpace Mitarbeiter*in</label
+                    >
+                    <label class="checkbox"
+                        ><input name="safety_briefed" type="checkbox" checked />
+                        Grundunterwiesen (heute)</label
+                    >
+                    <button type="submit" class="btn-primary">
+                        Registrieren
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div id="message" class="message" role="status"></div>
+        <script src="/static/app.js" defer></script>
+    </body>
+</html>
