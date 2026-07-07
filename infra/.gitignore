@@ -1,0 +1,3 @@
+# PostgreSQL data directory – never commit actual database files
+infra/postgres/data/*
+!infra/postgres/data/.gitkeep
