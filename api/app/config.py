@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     )
     headline: str = Field(default="MakerSpace Access", alias="HEADLINE")
 
+    # InfluxDB logging
+    influx_enabled: bool = Field(default=False, alias="INFLUX_ENABLED")
+    influx_url: str = Field(default="http://localhost:8086", alias="INFLUX_URL")
+    influx_token: str = Field(default="", alias="INFLUX_TOKEN")
+    influx_org: str = Field(default="makerspace", alias="INFLUX_ORG")
+    influx_bucket: str = Field(default="makerspace-access", alias="INFLUX_BUCKET")
+
     postgres_db: str = Field(default="makerspace_access", alias="POSTGRES_DB")
     postgres_user: str = Field(default="makerspace", alias="POSTGRES_USER")
     postgres_password: str = Field(default="change-me", alias="POSTGRES_PASSWORD")

@@ -3,6 +3,7 @@ from math import ceil
 from typing import Annotated
 
 from app.db import get_db_session
+from app.influx_logger import log_check_in, log_check_out, log_safety_briefing
 from app.models.member import Member
 from app.models.nfc_id import NfcId
 from app.schemas.member import (
@@ -200,6 +201,7 @@ def check_in(
     member.visits += 1
 
     db.commit()
+    log_check_in(member.id, f"{member.first_name} {member.last_name}", nfc_id)
     return PresenceEvent(member=_member_to_read(member), message="Checked in")
 
 
@@ -235,6 +237,9 @@ def check_out(
     member.last_visit_at = now
 
     db.commit()
+    log_check_out(
+        member.id, f"{member.first_name} {member.last_name}", nfc_id, duration_minutes
+    )
     return PresenceEvent(
         member=_member_to_read(member),
         message=f"Checked out, added {duration_minutes} minutes",
@@ -350,6 +355,7 @@ def update_safety_briefing(
 
     member.last_safety_briefing = update.last_safety_briefing
     db.commit()
+    log_safety_briefing(member.id, f"{member.first_name} {member.last_name}")
     return _member_to_read(member)
 
 
@@ -362,6 +368,7 @@ def bulk_safety_briefing(
     members = db.scalars(select(Member).where(Member.id.in_(bulk.member_ids))).all()
     for member in members:
         member.last_safety_briefing = bulk.last_safety_briefing
+        log_safety_briefing(member.id, f"{member.first_name} {member.last_name}")
     db.commit()
     return [_member_to_read(m) for m in members]
 

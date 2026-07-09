@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from app.config import get_settings
 from app.db import create_database_tables, get_db_session
+from app.influx_logger import log_auto_logout
 from app.models.member import Member
 from app.routes.health import router as health_router
 from app.routes.members import router as members_router
@@ -54,6 +55,7 @@ async def auto_logout_loop() -> None:
                         logging.info(
                             f"Auto-logout: logged out {len(present_members)} members at 20:00"
                         )
+                        log_auto_logout(len(present_members))
             except Exception as exc:
                 import logging
 
