@@ -33,8 +33,12 @@ async def auto_logout_loop() -> None:
         # (TODO: make timezone-aware for local TZ if needed)
         if now.hour >= 20 and _auto_logout_date != today_str:
             try:
-                db_session = next(get_db_session())
-                try:
+                from app.db import get_engine, get_session_factory
+                from app.models.member import Member
+                from sqlalchemy import select
+
+                session_factory = get_session_factory()
+                with session_factory() as db_session:
                     present_members = list(
                         db_session.scalars(
                             select(Member).where(Member.is_present.is_(True))
@@ -50,8 +54,6 @@ async def auto_logout_loop() -> None:
                         logging.info(
                             f"Auto-logout: logged out {len(present_members)} members at 20:00"
                         )
-                finally:
-                    db_session.close()
             except Exception as exc:
                 import logging
 
