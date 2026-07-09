@@ -19,6 +19,33 @@ const searchBtn = document.querySelector("#searchBtn");
 const storedApiKey = localStorage.getItem("makerspaceApiKey");
 if (storedApiKey) apiKeyInput.value = storedApiKey;
 
+// ===== UI Config =====
+let uiConfig = {};
+
+async function loadUiConfig() {
+  try {
+    uiConfig = await apiFetch("/api/v1/ui-config");
+    const logo = document.querySelector("#mainLogo");
+    if (uiConfig.logo_url) {
+      logo.src = uiConfig.logo_url;
+    }
+    if (uiConfig.logo_inverted) {
+      logo.style.filter = "invert(1)";
+    } else {
+      logo.style.filter = "none";
+    }
+    const headline = document.querySelector("#mainHeadline");
+    if (uiConfig.headline) {
+      headline.textContent = uiConfig.headline;
+    }
+    document.title = uiConfig.app_name || "MakerSpace Access Admin";
+  } catch (_) {
+    // use defaults
+  }
+}
+
+loadUiConfig();
+
 apiKeyInput.addEventListener("input", () => {
   localStorage.setItem("makerspaceApiKey", apiKeyInput.value);
 });

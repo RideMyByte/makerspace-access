@@ -1,6 +1,8 @@
+from typing import list
+
 from app.models.base import Base
 from app.models.nfc_id import NfcId
-from sqlalchemy import Boolean, Date, DateTime, Integer, String, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 
@@ -34,6 +36,10 @@ class Member(Base):
     )
     last_visit_at: Mapped[DateTime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    registration_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    additional_inductions: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, default=None
     )
 
     nfc_ids: Mapped[list[NfcId]] = relationship(

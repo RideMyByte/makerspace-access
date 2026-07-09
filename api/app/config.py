@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     api_key: str | None = Field(default=None, alias="API_KEY")
     registration_api_key: str | None = Field(default=None, alias="REGISTRATION_API_KEY")
     logo_inverted: bool = Field(default=False, alias="LOGO_INVERTED")
+    logo_url: str = Field(
+        default="https://halle1wh.de/content/images/2023/04/cropped-RZ_Halle1_Logo_2018_schwarz-e1540384559756-2-150x150-1.png",
+        alias="LOGO_URL",
+    )
+    headline: str = Field(default="MakerSpace Access", alias="HEADLINE")
 
     postgres_db: str = Field(default="makerspace_access", alias="POSTGRES_DB")
     postgres_user: str = Field(default="makerspace", alias="POSTGRES_USER")

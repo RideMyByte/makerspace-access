@@ -44,11 +44,14 @@ def _member_to_read(member: Member) -> MemberRead:
         "category": member.category,
         "nfc_ids": [n.nfc_id for n in member.nfc_ids],
         "created_at": member.created_at,
+        "visits": member.visits,
         "hours_on_site": member.hours_on_site,
         "total_presence_minutes": member.total_presence_minutes,
         "is_present": member.is_present,
         "current_login_at": member.current_login_at,
         "last_visit_at": member.last_visit_at,
+        "registration_date": member.registration_date,
+        "additional_inductions": member.additional_inductions,
     }
     return MemberRead.model_validate(data)
 

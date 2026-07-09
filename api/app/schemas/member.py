@@ -16,6 +16,11 @@ VALID_CATEGORIES = {
 }
 
 
+class InductionItem(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    date: date
+
+
 class MemberBase(BaseModel):
     first_name: str = Field(min_length=1, max_length=255)
     last_name: str = Field(min_length=1, max_length=255)
@@ -25,6 +30,8 @@ class MemberBase(BaseModel):
     last_safety_briefing: date | None = None
     is_makerstaff: bool = False
     category: str = Field(default="buerger")
+    registration_date: date | None = None
+    additional_inductions: list[InductionItem] = Field(default=[])
 
 
 class MemberCreate(MemberBase):
@@ -41,6 +48,8 @@ class MemberUpdate(BaseModel):
     last_safety_briefing: date | None = None
     is_makerstaff: bool = False
     category: str = Field(default="buerger")
+    registration_date: date | None = None
+    additional_inductions: list[InductionItem] = Field(default=[])
 
 
 class MemberRead(MemberBase):
@@ -49,6 +58,7 @@ class MemberRead(MemberBase):
     id: int
     nfc_ids: list[str] = Field(default=[])
     created_at: datetime
+    visits: int
     hours_on_site: int
     total_presence_minutes: int
     is_present: bool
