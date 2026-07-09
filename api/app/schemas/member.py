@@ -31,7 +31,7 @@ class MemberBase(BaseModel):
     is_makerstaff: bool = False
     category: str = Field(default="buerger")
     registration_date: date | None = None
-    additional_inductions: list[InductionItem] = Field(default=[])
+    additional_inductions: list[InductionItem] | None = None
 
 
 class MemberCreate(MemberBase):
@@ -49,7 +49,7 @@ class MemberUpdate(BaseModel):
     is_makerstaff: bool = False
     category: str = Field(default="buerger")
     registration_date: date | None = None
-    additional_inductions: list[InductionItem] = Field(default=[])
+    additional_inductions: list[InductionItem] | None = None
 
 
 class MemberRead(MemberBase):

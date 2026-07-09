@@ -51,7 +51,7 @@ def _member_to_read(member: Member) -> MemberRead:
         "current_login_at": member.current_login_at,
         "last_visit_at": member.last_visit_at,
         "registration_date": member.registration_date,
-        "additional_inductions": member.additional_inductions,
+        "additional_inductions": member.additional_inductions or [],
     }
     return MemberRead.model_validate(data)
 
