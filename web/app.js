@@ -101,16 +101,18 @@ function safetyAge(lastSafetyBriefing) {
   const diffMs = now - d;
   const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
   const months = Math.floor(days / 30);
-  const remDays = days % 30;
+  const years = Math.floor(days / 365);
 
-  if (days > 365) {
-    const years = Math.floor(days / 365);
+  if (years > 0) {
     const remMonths = Math.floor((days % 365) / 30);
-    return { text: `${years} J, ${remMonths} M`, valid: false };
+    if (remMonths > 0)
+      return { text: `${years} J, ${remMonths} M`, valid: false };
+    return { text: `${years} Jahre`, valid: false };
   }
-  if (months >= 6) return { text: `${months} M, ${remDays} T`, valid: false };
-  if (months > 0) return { text: `${months} M, ${remDays} T`, valid: true };
-  return { text: `${days} T`, valid: true };
+  if (months >= 6) return { text: `${months} Monate`, valid: false };
+  if (months > 0) return { text: `${months} Monate`, valid: true };
+  if (days > 0) return { text: `${days} Tage`, valid: true };
+  return { text: "Heute", valid: true };
 }
 
 function memberName(m) {
@@ -215,12 +217,14 @@ function renderPresentTable(members) {
         : "-";
       const safety = safetyAge(m.last_safety_briefing);
       const safetyClass = safety.valid ? "safety-ok" : "safety-expired";
+      const lastBriefing = m.last_safety_briefing || "-";
       return `
         <tr>
           <td><input type="checkbox" class="present-checkbox" data-id="${m.id}" ${checkedPresentIds.has(m.id) ? "checked" : ""} /></td>
           <td>${m.id}</td>
           <td><a href="#" class="edit-link" data-id="${m.id}">${memberName(m)}</a></td>
           <td class="${safetyClass}">${safety.text}</td>
+          <td>${lastBriefing}</td>
           <td>${formatDate(m.current_login_at)}</td>
           <td>${duration}</td>
           <td><button class="checkout-btn" data-id="${m.id}" title="Ausloggen">&times;</button></td>
@@ -232,7 +236,7 @@ function renderPresentTable(members) {
     <table class="present-table">
       <thead>
         <tr>
-          <th></th><th>ID</th><th>Name</th><th>Unterweisung</th>
+          <th></th><th>ID</th><th>Name</th><th>Unterweisung</th><th>Letzte</th>
           <th>Eingeloggt seit</th><th>Dauer</th><th>Aktion</th>
         </tr>
       </thead>
@@ -283,8 +287,20 @@ function renderMemberTable(members) {
   }
 
   const rows = members
-    .map(
-      (m) => `
+    .map((m) => {
+      // Anwesenheit in Tage/Stunden umrechnen
+      const mins = m.total_presence_minutes || 0;
+      const hours = Math.floor(mins / 60);
+      const days = Math.floor(hours / 24);
+      const remHours = hours % 24;
+      let presenceText;
+      if (days > 0) {
+        presenceText = `${days}T ${remHours}h`;
+      } else {
+        presenceText = `${hours}h`;
+      }
+
+      return `
         <tr>
           <td>${m.id}</td>
           <td><a href="#" class="edit-link" data-id="${m.id}">${memberName(m)}</a></td>
@@ -294,11 +310,10 @@ function renderMemberTable(members) {
           <td>${m.is_present ? "Ja" : "Nein"}</td>
           <td>${formatDate(m.last_visit_at)}</td>
           <td>${m.visits}</td>
-          <td>${m.total_presence_minutes} min</td>
-          <td>${m.is_makerstaff ? "Team" : ""}</td>
+          <td>${presenceText}</td>
           <td><button class="checkin-btn" data-nfc="${m.nfc_ids?.[0] || ""}" title="Einloggen">&#9654;</button></td>
-        </tr>`,
-    )
+        </tr>`;
+    })
     .join("");
 
   memberList.innerHTML = `
@@ -307,7 +322,7 @@ function renderMemberTable(members) {
         <tr>
           <th>ID</th><th>Name</th><th>Kontakt</th><th>Kategorie</th>
           <th>Grundunterweisung</th><th>Anwesend</th><th>Letzter Besuch</th>
-          <th>Besuche</th><th>Anwesenheit</th><th>Team</th><th></th>
+          <th>Besuche</th><th>Anwesenheit</th><th></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
