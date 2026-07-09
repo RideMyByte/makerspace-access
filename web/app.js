@@ -94,6 +94,25 @@ function formatDateOnly(value) {
   return value;
 }
 
+function safetyAge(lastSafetyBriefing) {
+  if (!lastSafetyBriefing) return { text: "Keine", valid: false };
+  const now = new Date();
+  const d = new Date(lastSafetyBriefing);
+  const diffMs = now - d;
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const months = Math.floor(days / 30);
+  const remDays = days % 30;
+
+  if (days > 365) {
+    const years = Math.floor(days / 365);
+    const remMonths = Math.floor((days % 365) / 30);
+    return { text: `${years} J, ${remMonths} M`, valid: false };
+  }
+  if (months >= 6) return { text: `${months} M, ${remDays} T`, valid: false };
+  if (months > 0) return { text: `${months} M, ${remDays} T`, valid: true };
+  return { text: `${days} T`, valid: true };
+}
+
 function memberName(m) {
   return `${m.first_name} ${m.last_name}`;
 }
@@ -194,13 +213,14 @@ function renderPresentTable(members) {
             (Date.now() - new Date(m.current_login_at).getTime()) / 60000,
           ) + " min"
         : "-";
+      const safety = safetyAge(m.last_safety_briefing);
+      const safetyClass = safety.valid ? "safety-ok" : "safety-expired";
       return `
         <tr>
           <td><input type="checkbox" class="present-checkbox" data-id="${m.id}" ${checkedPresentIds.has(m.id) ? "checked" : ""} /></td>
           <td>${m.id}</td>
           <td><a href="#" class="edit-link" data-id="${m.id}">${memberName(m)}</a></td>
-          <td>${m.email || "-"}</td>
-          <td>${m.nfc_ids?.join(", ") || "-"}</td>
+          <td class="${safetyClass}">${safety.text}</td>
           <td>${formatDate(m.current_login_at)}</td>
           <td>${duration}</td>
           <td><button class="checkout-btn" data-id="${m.id}" title="Ausloggen">&times;</button></td>
@@ -209,10 +229,10 @@ function renderPresentTable(members) {
     .join("");
 
   presentMembers.innerHTML = `
-    <table>
+    <table class="present-table">
       <thead>
         <tr>
-          <th></th><th>ID</th><th>Name</th><th>Kontakt</th><th>NFC-IDs</th>
+          <th></th><th>ID</th><th>Name</th><th>Unterweisung</th>
           <th>Eingeloggt seit</th><th>Dauer</th><th>Aktion</th>
         </tr>
       </thead>

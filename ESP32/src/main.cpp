@@ -28,6 +28,9 @@ enum AnimState : uint8_t {
 AnimState currentAnim = ANIM_IDLE;
 unsigned long animStartMs = 0;
 
+// Pending safety status for post-login animation chain
+bool pendingSafetyValid = false;
+
 // Non-blocking timers
 unsigned long lastCardCheckMs = 0;
 unsigned long cardDebounceUntilMs = 0;
@@ -62,22 +65,22 @@ void updateAnimation() {
       uint16_t cycle = now % 4000;  // 0…3999 ms
       uint8_t brightness;
       if (cycle < 2000) {
-        brightness = map(cycle, 0, 1999, 0, WS2812_MAX_BRIGHTNESS);
+        brightness = map(cycle, 0, 1999, 0, WS2812_MAX_BRIGHTNESS * 0.7);
       } else {
-        brightness = map(cycle, 2000, 3999, WS2812_MAX_BRIGHTNESS, 0);
+        brightness = map(cycle, 2000, 3999, WS2812_MAX_BRIGHTNESS * 0.7, 0);
       }
       setLed(CRGB::White, brightness);
       break;
     }
 
-    // ─── CHECK-IN OK: green fast blink 3s ───
+    // ─── CHECK-IN OK: green fast blink 3s, then safety check ───
     case ANIM_CHECK_IN_OK: {
       if (elapsed >= 3000) {
-        // Transition to safety check animation
-        startAnimation(ANIM_SAFETY_OK);
+        // Transition to safety check based on stored status
+        startAnimation(pendingSafetyValid ? ANIM_SAFETY_OK : ANIM_SAFETY_FAIL);
         return;
       }
-      uint8_t phase = (elapsed / 150) % 2;  // ~150ms per half-cycle
+      uint8_t phase = (elapsed / 150) % 2;
       setLed(CRGB::Green, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
       break;
     }
@@ -378,22 +381,18 @@ void processCard(const String& nfcId) {
       startAnimation(ANIM_ERROR);
     }
   } else {
-    // ─── CHECK IN ───
-    if (!safetyValid) {
-      Serial.println("Safety invalid → red fast blink 5s, skip check-in");
-      startAnimation(ANIM_SAFETY_FAIL);
-      return;
-    }
-
+    // ─── CHECK IN – always allowed, even without valid safety briefing ───
     JsonDocument ci;
     ci["nfc_id"] = nfcId;
     String body;
     serializeJson(ci, body);
     int c = apiRequest("POST", "/members/check-in", body, &response);
     if (c == 200) {
-      Serial.println("Checked in → green blink, then safety check");
+      Serial.println("Checked in → green blink");
+      pendingSafetyValid = safetyValid;
       startAnimation(ANIM_CHECK_IN_OK);
-      // ANIM_CHECK_IN_OK will auto-transition to ANIM_SAFETY_OK after 3s
+      // ANIM_CHECK_IN_OK auto-transitions to ANIM_SAFETY_OK (3s)
+      // or ANIM_SAFETY_FAIL (5s) depending on safety briefing status
     } else {
       Serial.printf("Check-in failed: HTTP %d\n", c);
       startAnimation(ANIM_ERROR);

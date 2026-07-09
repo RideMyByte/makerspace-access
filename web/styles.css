@@ -326,7 +326,7 @@ details.nfc-history summary:hover {
 table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 70rem;
+    min-width: 50rem;
 }
 
 th,
@@ -368,6 +368,14 @@ th {
     background: #1e3a8a;
 }
 
+.safety-ok {
+  color: #4ade80;
+}
+
+.safety-expired {
+  color: #f87171;
+}
+
 @media (max-width: 1000px) {
     .page-header {
         flex-direction: column;
@@ -398,5 +406,25 @@ th {
     .layout,
     .grid-form {
         grid-template-columns: 1fr;
+    }
+
+    /* Mobile-friendly tables */
+    .table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    table {
+        min-width: 40rem;
+        font-size: 0.85rem;
+    }
+
+    table.present-table {
+        min-width: 30rem;
+    }
+
+    th, td {
+        padding: 0.4rem 0.5rem;
+        white-space: nowrap;
     }
 }
