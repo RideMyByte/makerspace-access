@@ -1,5 +1,3 @@
-from typing import list
-
 from app.models.base import Base
 from app.models.nfc_id import NfcId
 from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, String, func
