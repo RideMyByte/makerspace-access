@@ -12,13 +12,17 @@
 MFRC522 rfid(RC522_SS_PIN, RC522_RST_PIN);
 CRGB leds[WS2812_COUNT];
 
-// LED animation state
+// ===== LED animation states =====
 enum AnimState : uint8_t {
-  ANIM_IDLE = 0,
-  ANIM_RAINBOW = 3,
-  ANIM_FADE_UP_GREEN = 1,
-  ANIM_FADE_GREEN_TO_BLUE = 2,
-  ANIM_PULSE_RED = 4,
+  ANIM_IDLE = 0,          // White pulsating – waiting for scan
+  ANIM_CHECK_IN_OK,       // Green fast blink 3s – login successful
+  ANIM_SAFETY_OK,         // Green solid on 3s – safety briefing valid
+  ANIM_SAFETY_FAIL,       // Red fast blink 5s – safety briefing missing/expired
+  ANIM_CHECK_OUT,         // Green→red→idle fade – logout sequence
+  ANIM_UNKNOWN_CARD,      // Rainbow starting at white – unknown NFC
+  ANIM_API_ERROR,         // Pink blinking – API unreachable or wrong key
+  ANIM_NO_WIFI,           // Blue blinking – no WiFi connection
+  ANIM_ERROR,             // Red pulse – generic error
 };
 
 AnimState currentAnim = ANIM_IDLE;
@@ -27,6 +31,8 @@ unsigned long animStartMs = 0;
 // Non-blocking timers
 unsigned long lastCardCheckMs = 0;
 unsigned long cardDebounceUntilMs = 0;
+unsigned long lastWifiCheckMs = 0;
+bool wifiWasConnected = false;
 
 // ===== LED helpers =====
 void startAnimation(AnimState anim) {
@@ -50,9 +56,10 @@ void updateAnimation() {
   unsigned long elapsed = now - animStartMs;
 
   switch (currentAnim) {
+
+    // ─── IDLE: white pulsating at 1/5 brightness, 4s cycle ───
     case ANIM_IDLE: {
-      // Gentle white pulsing at 1/5 brightness
-      uint16_t cycle = (now / 4000) % 1000;  // 4s cycle
+      uint16_t cycle = (now / 4000) % 1000;
       uint8_t brightness;
       if (cycle < 500) {
         brightness = map(cycle, 0, 499, 0, 51);
@@ -63,40 +70,97 @@ void updateAnimation() {
       break;
     }
 
-    case ANIM_FADE_UP_GREEN: {
+    // ─── CHECK-IN OK: green fast blink 3s ───
+    case ANIM_CHECK_IN_OK: {
       if (elapsed >= 3000) {
-        ledOff();
-        currentAnim = ANIM_IDLE;
+        // Transition to safety check animation
+        startAnimation(ANIM_SAFETY_OK);
         return;
       }
-      uint8_t brightness = map(elapsed, 0, 3000, 0, WS2812_MAX_BRIGHTNESS);
-      setLed(CRGB::Green, brightness);
+      uint8_t phase = (elapsed / 150) % 2;  // ~150ms per half-cycle
+      setLed(CRGB::Green, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
       break;
     }
 
-    case ANIM_FADE_GREEN_TO_BLUE: {
+    // ─── SAFETY OK: green solid on 3s ───
+    case ANIM_SAFETY_OK: {
       if (elapsed >= 3000) {
-        setLed(CRGB::Blue);
         currentAnim = ANIM_IDLE;
         return;
       }
-      uint8_t progress = map(elapsed, 0, 3000, 0, 255);
-      CRGB color = blend(CRGB::Green, CRGB::Blue, progress);
-      setLed(color);
+      setLed(CRGB::Green, WS2812_MAX_BRIGHTNESS);
       break;
     }
 
-    case ANIM_RAINBOW: {
+    // ─── SAFETY FAIL: red fast blink 5s ───
+    case ANIM_SAFETY_FAIL: {
+      if (elapsed >= 5000) {
+        currentAnim = ANIM_IDLE;
+        return;
+      }
+      uint8_t phase = (elapsed / 150) % 2;
+      setLed(CRGB::Red, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
+      break;
+    }
+
+    // ─── CHECK-OUT: green→red 2s → red solid 3s → fade to idle 2s ───
+    case ANIM_CHECK_OUT: {
+      // Phase 1: green fade → red (2s)
+      if (elapsed < 2000) {
+        uint8_t blendVal = map(elapsed, 0, 1999, 0, 255);
+        CRGB color = blend(CRGB::Green, CRGB::Red, blendVal);
+        setLed(color);
+        return;
+      }
+      // Phase 2: red solid on (3s)
+      if (elapsed < 5000) {
+        setLed(CRGB::Red, WS2812_MAX_BRIGHTNESS);
+        return;
+      }
+      // Phase 3: fade red → off (2s) → idle
+      if (elapsed < 7000) {
+        uint8_t brightness = map(elapsed, 5000, 6999, WS2812_MAX_BRIGHTNESS, 0);
+        setLed(CRGB::Red, brightness);
+        return;
+      }
+      currentAnim = ANIM_IDLE;
+      break;
+    }
+
+    // ─── UNKNOWN CARD: rainbow starting from white (3s) ───
+    case ANIM_UNKNOWN_CARD: {
       if (elapsed >= 3000) {
         currentAnim = ANIM_IDLE;
         return;
       }
+      // Start from white (hue=0, low saturation) and sweep to full rainbow
       uint8_t hue = map(elapsed, 0, 3000, 0, 255);
-      setLed(CHSV(hue, 255, 255));
+      uint8_t sat = map(elapsed, 0, 1000, 0, 255);  // fade into color
+      if (sat > 255) sat = 255;
+      setLed(CHSV(hue, sat, 255));
       break;
     }
 
-    case ANIM_PULSE_RED: {
+    // ─── API ERROR: pink blinking (500ms cycle) ───
+    case ANIM_API_ERROR: {
+      if (elapsed >= 8000) {
+        currentAnim = ANIM_IDLE;
+        return;
+      }
+      uint8_t phase = (elapsed / 250) % 2;
+      setLed(CRGB(255, 20, 147), phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);  // DeepPink
+      break;
+    }
+
+    // ─── NO WIFI: blue blinking (500ms cycle) ───
+    case ANIM_NO_WIFI: {
+      uint8_t phase = (elapsed / 250) % 2;
+      setLed(CRGB::Blue, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
+      break;
+    }
+
+    // ─── GENERIC ERROR: red pulse (5s) ───
+    case ANIM_ERROR: {
       if (elapsed >= 5000) {
         ledOff();
         currentAnim = ANIM_IDLE;
@@ -120,11 +184,45 @@ void connectWifi() {
   Serial.printf("Connecting to WiFi \"%s\"...\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+    delay(100);
+    // Show blue blinking during connection attempt
+    uint8_t phase = (millis() / 250) % 2;
+    setLed(CRGB::Blue, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
+    if (millis() - start > 30000) {
+      Serial.println("\nWiFi connection timeout!");
+      break;
+    }
   }
-  Serial.printf("\nWiFi connected. IP: %s\n", WiFi.localIP().toString().c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\nWiFi connected. IP: %s\n", WiFi.localIP().toString().c_str());
+    wifiWasConnected = true;
+  }
+}
+
+// Check WiFi status and signal disconnection via LED
+void checkWifiStatus() {
+  unsigned long now = millis();
+  if (now - lastWifiCheckMs < 2000) return;
+  lastWifiCheckMs = now;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    if (currentAnim == ANIM_IDLE || currentAnim == ANIM_NO_WIFI) {
+      startAnimation(ANIM_NO_WIFI);
+    }
+    // Try to reconnect
+    if (wifiWasConnected) {
+      Serial.println("WiFi lost, reconnecting...");
+      wifiWasConnected = false;
+      WiFi.reconnect();
+    }
+  } else {
+    if (currentAnim == ANIM_NO_WIFI) {
+      currentAnim = ANIM_IDLE;
+    }
+    wifiWasConnected = true;
+  }
 }
 
 // ===== HTTP helpers =====
@@ -139,6 +237,11 @@ String buildUrl(const String& path) {
 }
 
 int apiRequest(const String& method, const String& path, const String& jsonBody = "", String* response = nullptr) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("No WiFi – cannot make API request");
+    return -1;
+  }
+
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.begin(buildUrl(path));
@@ -190,15 +293,36 @@ String readCardUid() {
 void processCard(const String& nfcId) {
   Serial.printf("Card: %s\n", nfcId.c_str());
 
+  // Check WiFi first
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("No WiFi – cannot process card");
+    startAnimation(ANIM_NO_WIFI);
+    return;
+  }
+
   // Get member by NFC
   String path = "/members/nfc/";
   path += nfcId;
   String response;
   int code = apiRequest("GET", path, "", &response);
 
-  if (code <= 0 || response.length() == 0) {
-    Serial.println("API error");
-    startAnimation(ANIM_PULSE_RED);
+  // API error or connection failure
+  if (code <= 0) {
+    Serial.println("API unreachable");
+    startAnimation(ANIM_API_ERROR);
+    return;
+  }
+
+  // Wrong API key (401) or other HTTP error
+  if (code == 401) {
+    Serial.println("Wrong API key");
+    startAnimation(ANIM_API_ERROR);
+    return;
+  }
+
+  if (code != 200 || response.length() == 0) {
+    Serial.printf("API error: HTTP %d\n", code);
+    startAnimation(ANIM_API_ERROR);
     return;
   }
 
@@ -206,11 +330,11 @@ void processCard(const String& nfcId) {
   DeserializationError error = deserializeJson(doc, response);
   if (error) {
     Serial.println("JSON parse error");
-    startAnimation(ANIM_PULSE_RED);
+    startAnimation(ANIM_API_ERROR);
     return;
   }
 
-  // Unknown NFC → submit as pending
+  // Unknown NFC → submit as pending, rainbow starting from white
   if (doc["detail"].is<String>() && doc["detail"].as<String>().length() > 0) {
     JsonDocument p;
     p["nfc_id"] = nfcId;
@@ -218,11 +342,11 @@ void processCard(const String& nfcId) {
     serializeJson(p, body);
     int pc = apiRequest("POST", "/pending-nfc", body);
     if (pc == 201 || pc == 409) {
-      Serial.println("Pending NFC submitted");
-      startAnimation(ANIM_RAINBOW);
+      Serial.println("Pending NFC submitted → rainbow");
+      startAnimation(ANIM_UNKNOWN_CARD);
     } else {
       Serial.printf("Pending NFC failed: HTTP %d\n", pc);
-      startAnimation(ANIM_PULSE_RED);
+      startAnimation(ANIM_API_ERROR);
     }
     return;
   }
@@ -231,39 +355,40 @@ void processCard(const String& nfcId) {
   bool safetyValid = doc["safety_briefing_valid"] | false;
   bool isPresent = doc["is_present"] | false;
 
-  if (!safetyValid) {
-    Serial.println("Safety invalid → red pulse");
-    startAnimation(ANIM_PULSE_RED);
-    return;
-  }
-
   if (isPresent) {
-    // Check out
+    // ─── CHECK OUT ───
     JsonDocument co;
     co["nfc_id"] = nfcId;
     String body;
     serializeJson(co, body);
     int c = apiRequest("POST", "/members/check-out", body, &response);
     if (c == 200) {
-      Serial.println("Checked out → green→blue");
-      startAnimation(ANIM_FADE_GREEN_TO_BLUE);
+      Serial.println("Checked out → green→red sequence");
+      startAnimation(ANIM_CHECK_OUT);
     } else {
       Serial.printf("Check-out failed: HTTP %d\n", c);
-      startAnimation(ANIM_PULSE_RED);
+      startAnimation(ANIM_ERROR);
     }
   } else {
-    // Check in
+    // ─── CHECK IN ───
+    if (!safetyValid) {
+      Serial.println("Safety invalid → red fast blink 5s, skip check-in");
+      startAnimation(ANIM_SAFETY_FAIL);
+      return;
+    }
+
     JsonDocument ci;
     ci["nfc_id"] = nfcId;
     String body;
     serializeJson(ci, body);
     int c = apiRequest("POST", "/members/check-in", body, &response);
     if (c == 200) {
-      Serial.println("Checked in → green fade");
-      startAnimation(ANIM_FADE_UP_GREEN);
+      Serial.println("Checked in → green blink, then safety check");
+      startAnimation(ANIM_CHECK_IN_OK);
+      // ANIM_CHECK_IN_OK will auto-transition to ANIM_SAFETY_OK after 3s
     } else {
       Serial.printf("Check-in failed: HTTP %d\n", c);
-      startAnimation(ANIM_PULSE_RED);
+      startAnimation(ANIM_ERROR);
     }
   }
 }
@@ -289,42 +414,59 @@ void setup() {
 
   // Diagnostics
   Serial.println("--- API diagnostics ---");
-  IPAddress apiIp;
-  if (WiFi.hostByName(API_HOST, apiIp)) {
-    Serial.printf("✅ DNS: %s → %s\n", API_HOST, apiIp.toString().c_str());
-    WiFiClient test;
-    if (test.connect(apiIp, API_PORT)) {
-      Serial.printf("✅ TCP connect %s:%d OK\n", API_HOST, API_PORT);
-      test.stop();
+  if (WiFi.status() == WL_CONNECTED) {
+    IPAddress apiIp;
+    if (WiFi.hostByName(API_HOST, apiIp)) {
+      Serial.printf("✅ DNS: %s → %s\n", API_HOST, apiIp.toString().c_str());
+      WiFiClient test;
+      if (test.connect(apiIp, API_PORT)) {
+        Serial.printf("✅ TCP connect %s:%d OK\n", API_HOST, API_PORT);
+        test.stop();
+      } else {
+        Serial.printf("❌ TCP connect failed\n");
+      }
+      HTTPClient http;
+      http.begin(buildUrl("/health"));
+      int hc = http.GET();
+      if (hc > 0) {
+        Serial.printf("✅ Health: HTTP %d\n", hc);
+      } else {
+        Serial.println("❌ Health check failed – showing API error");
+        startAnimation(ANIM_API_ERROR);
+      }
+      http.end();
+      http.begin(buildUrl("/members/present"));
+      http.addHeader("X-API-Key", API_KEY);
+      int ac = http.GET();
+      if (ac == 200) {
+        Serial.println("✅ API key valid");
+      } else if (ac == 401) {
+        Serial.println("❌ Wrong API key – pink blinking");
+        startAnimation(ANIM_API_ERROR);
+      } else {
+        Serial.printf("⚠ API key check: HTTP %d\n", ac);
+      }
+      http.end();
     } else {
-      Serial.printf("❌ TCP connect failed\n");
+      Serial.printf("❌ DNS resolution failed\n");
     }
-    HTTPClient http;
-    http.begin(buildUrl("/health"));
-    int hc = http.GET();
-    if (hc > 0) {
-      Serial.printf("✅ Health: HTTP %d\n", hc);
-    }
-    http.end();
-    http.begin(buildUrl("/members/present"));
-    http.addHeader("X-API-Key", API_KEY);
-    int ac = http.GET();
-    if (ac == 200) Serial.println("✅ API key valid");
-    else Serial.printf("⚠ API key check: HTTP %d\n", ac);
-    http.end();
   } else {
-    Serial.printf("❌ DNS resolution failed\n");
+    Serial.println("❌ No WiFi – will retry in loop");
+    startAnimation(ANIM_NO_WIFI);
   }
   Serial.println("--- Ready ---");
 
-  setLed(CRGB::Green, 80);
-  delay(200);
-  ledOff();
+  if (currentAnim == ANIM_IDLE) {
+    setLed(CRGB::Green, 80);
+    delay(200);
+    ledOff();
+  }
 }
 
 // ===== Loop =====
 void loop() {
   updateAnimation();
+  checkWifiStatus();
 
   unsigned long now = millis();
 
