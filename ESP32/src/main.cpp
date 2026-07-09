@@ -57,14 +57,14 @@ void updateAnimation() {
 
   switch (currentAnim) {
 
-    // ─── IDLE: white pulsating at 1/5 brightness, 4s cycle ───
+    // ─── IDLE: white pulsating at full brightness, 6s cycle ───
     case ANIM_IDLE: {
-      uint16_t cycle = (now / 4000) % 1000;
+      uint16_t cycle = (now / 6000) % 1000;
       uint8_t brightness;
       if (cycle < 500) {
-        brightness = map(cycle, 0, 499, 0, 51);
+        brightness = map(cycle, 0, 499, 0, WS2812_MAX_BRIGHTNESS);
       } else {
-        brightness = map(cycle, 500, 999, 51, 0);
+        brightness = map(cycle, 500, 999, WS2812_MAX_BRIGHTNESS, 0);
       }
       setLed(CRGB::White, brightness);
       break;
@@ -308,20 +308,21 @@ void processCard(const String& nfcId) {
 
   // API error or connection failure
   if (code <= 0) {
-    Serial.println("API unreachable");
+    Serial.println("Connection error – API unreachable");
     startAnimation(ANIM_API_ERROR);
     return;
   }
 
-  // Wrong API key (401) or other HTTP error
+  // Wrong API key (401)
   if (code == 401) {
     Serial.println("Wrong API key");
     startAnimation(ANIM_API_ERROR);
     return;
   }
 
-  if (code != 200 || response.length() == 0) {
-    Serial.printf("API error: HTTP %d\n", code);
+  // Empty response
+  if (response.length() == 0) {
+    Serial.println("Empty API response");
     startAnimation(ANIM_API_ERROR);
     return;
   }
@@ -334,20 +335,27 @@ void processCard(const String& nfcId) {
     return;
   }
 
-  // Unknown NFC → submit as pending, rainbow starting from white
-  if (doc["detail"].is<String>() && doc["detail"].as<String>().length() > 0) {
+  // 404 with detail → unknown NFC card, not an API error
+  if (code == 404 && doc["detail"].is<String>()) {
     JsonDocument p;
     p["nfc_id"] = nfcId;
     String body;
     serializeJson(p, body);
     int pc = apiRequest("POST", "/pending-nfc", body);
     if (pc == 201 || pc == 409) {
-      Serial.println("Pending NFC submitted → rainbow");
+      Serial.println("Unknown card – submitted as pending NFC → rainbow");
       startAnimation(ANIM_UNKNOWN_CARD);
     } else {
-      Serial.printf("Pending NFC failed: HTTP %d\n", pc);
+      Serial.printf("Pending NFC submission failed: HTTP %d\n", pc);
       startAnimation(ANIM_API_ERROR);
     }
+    return;
+  }
+
+  // Any other unexpected HTTP error
+  if (code != 200) {
+    Serial.printf("API error: HTTP %d\n", code);
+    startAnimation(ANIM_API_ERROR);
     return;
   }
 
