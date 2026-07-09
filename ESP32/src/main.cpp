@@ -57,14 +57,14 @@ void updateAnimation() {
 
   switch (currentAnim) {
 
-    // ─── IDLE: white pulsating at full brightness, 6s cycle ───
+    // ─── IDLE: white pulsating at full brightness, 4s cycle ───
     case ANIM_IDLE: {
-      uint16_t cycle = (now / 6000) % 1000;
+      uint16_t cycle = now % 4000;  // 0…3999 ms
       uint8_t brightness;
-      if (cycle < 500) {
-        brightness = map(cycle, 0, 499, 0, WS2812_MAX_BRIGHTNESS);
+      if (cycle < 2000) {
+        brightness = map(cycle, 0, 1999, 0, WS2812_MAX_BRIGHTNESS);
       } else {
-        brightness = map(cycle, 500, 999, WS2812_MAX_BRIGHTNESS, 0);
+        brightness = map(cycle, 2000, 3999, WS2812_MAX_BRIGHTNESS, 0);
       }
       setLed(CRGB::White, brightness);
       break;

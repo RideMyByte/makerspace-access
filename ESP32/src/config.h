@@ -17,7 +17,7 @@
 // ===== WS2812B =====
 #define WS2812_PIN 13
 #define WS2812_COUNT 1
-#define WS2812_MAX_BRIGHTNESS 128
+#define WS2812_MAX_BRIGHTNESS 255
 
 // ===== Timing =====
 #define POLL_INTERVAL_MS 500
