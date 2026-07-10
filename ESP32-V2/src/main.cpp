@@ -3,7 +3,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
-#include <PN532_I2C.h>
+#include <Adafruit_PN532.h>
 #include <TFT_eSPI.h>
 #include <FastLED.h>
 
@@ -13,8 +13,7 @@
 TFT_eSPI tft = TFT_eSPI();
 
 // ===== PN532 NFC (I2C) =====
-PN532_I2C nfcI2c(Wire);
-PN532 nfc(nfcI2c);
+Adafruit_PN532 nfc = Adafruit_PN532(PN532_IRQ);
 
 // ===== LED =====
 CRGB leds[WS2812_COUNT];
