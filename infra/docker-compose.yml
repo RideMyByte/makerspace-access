@@ -57,6 +57,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
+      - frontend
       - backend
     healthcheck:
       test:
