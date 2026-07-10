@@ -46,6 +46,11 @@ services:
       API_KEY: ${API_KEY}
       REGISTRATION_API_KEY: ${REGISTRATION_API_KEY}
       CREATE_TABLES_ON_STARTUP: ${CREATE_TABLES_ON_STARTUP:-true}
+      INFLUX_ENABLED: ${INFLUX_ENABLED:-false}
+      INFLUX_URL: ${INFLUX_URL}
+      INFLUX_TOKEN: ${INFLUX_TOKEN}
+      INFLUX_ORG: ${INFLUX_ORG:-makerspace}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-makerspace-access}
     expose:
       - "${API_PORT:-8000}"
     depends_on:
