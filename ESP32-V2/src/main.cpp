@@ -3,7 +3,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
-#include <Adafruit_PN532.h>
+#include <PN532_I2C.h>
 #include <TFT_eSPI.h>
 #include <FastLED.h>
 
@@ -13,7 +13,8 @@
 TFT_eSPI tft = TFT_eSPI();
 
 // ===== PN532 NFC (I2C) =====
-Adafruit_PN532 nfc(Wire, PN532_IRQ);
+PN532_I2C nfcI2c(Wire);
+PN532 nfc(nfcI2c);
 
 // ===== LED =====
 CRGB leds[WS2812_COUNT];
@@ -41,7 +42,6 @@ enum ScreenState : uint8_t {
 
 ScreenState screenState = SCREEN_IDLE;
 String screenFirstName = "";
-String screenMessage = "";
 unsigned long screenUntilMs = 0;
 
 // Timers
@@ -73,7 +73,6 @@ void updateAnimation() {
 
   switch (currentAnim) {
     case ANIM_IDLE: {
-      // White gentle pulse
       uint16_t cycle = now % 4000;
       uint8_t brightness;
       if (cycle < 2000) {
@@ -121,14 +120,12 @@ void drawIdleScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
-  // "Hallo! :)" large centered
   tft.setTextSize(3);
   tft.drawCentreString("Hallo! :)", tft.width() / 2, 30, 4);
 
-  // Clock
   tft.setTextSize(6);
-  char timeStr[9];
   struct tm timeinfo;
+  char timeStr[9];
   if (getLocalTime(&timeinfo)) {
     strftime(timeStr, sizeof(timeStr), "%H:%M", &timeinfo);
   } else {
@@ -162,14 +159,10 @@ void drawUnknownScreen() {
 }
 
 void updateScreen() {
-  unsigned long now = millis();
-
-  if (screenState != SCREEN_IDLE && now > screenUntilMs) {
+  if (screenState != SCREEN_IDLE && millis() > screenUntilMs) {
     screenState = SCREEN_IDLE;
     drawIdleScreen();
   }
-
-  // Screen is updated by explicit calls to draw functions
 }
 
 void showTemporaryScreen(ScreenState state, const String& firstName, unsigned long durationMs) {
@@ -178,17 +171,10 @@ void showTemporaryScreen(ScreenState state, const String& firstName, unsigned lo
   screenUntilMs = millis() + durationMs;
 
   switch (state) {
-    case SCREEN_CHECKED_IN:
-      drawCheckinScreen(firstName);
-      break;
-    case SCREEN_CHECKED_OUT:
-      drawCheckoutScreen(firstName);
-      break;
-    case SCREEN_UNKNOWN:
-      drawUnknownScreen();
-      break;
-    default:
-      break;
+    case SCREEN_CHECKED_IN: drawCheckinScreen(firstName); break;
+    case SCREEN_CHECKED_OUT: drawCheckoutScreen(firstName); break;
+    case SCREEN_UNKNOWN: drawUnknownScreen(); break;
+    default: break;
   }
 }
 
@@ -276,17 +262,15 @@ int apiRequest(const String& method, const String& path, const String& jsonBody 
   return code;
 }
 
-// ===== NFC (PN532) =====
+// ===== NFC (PN532 via elechouse/PN532) =====
 bool readNfcId(String& outUid) {
   uint8_t uid[7];
   uint8_t uidLen;
 
-  // Try to read a card
   if (!nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen, 50)) {
     return false;
   }
 
-  // Convert UID to hex string
   String uidStr;
   for (uint8_t i = 0; i < uidLen; i++) {
     if (uid[i] < 0x10) uidStr += "0";
@@ -294,7 +278,7 @@ bool readNfcId(String& outUid) {
   }
   uidStr.toUpperCase();
 
-  // Wait for card removal to avoid re-trigger
+  // Wait for card removal
   while (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen, 50)) {
     delay(50);
   }
@@ -308,7 +292,6 @@ void processCard(const String& nfcId) {
   Serial.printf("Card: %s\n", nfcId.c_str());
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("No WiFi");
     startAnimation(ANIM_BLUE_BLINK);
     return;
   }
@@ -318,24 +301,15 @@ void processCard(const String& nfcId) {
   String response;
   int code = apiRequest("GET", path, "", &response);
 
-  if (code <= 0 || code == 401) {
-    startAnimation(ANIM_PINK_BLINK);
-    return;
-  }
-
-  if (response.length() == 0) {
+  if (code <= 0 || code == 401 || response.length() == 0) {
     startAnimation(ANIM_PINK_BLINK);
     return;
   }
 
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, response);
-  if (error) {
-    startAnimation(ANIM_PINK_BLINK);
-    return;
-  }
+  if (error) { startAnimation(ANIM_PINK_BLINK); return; }
 
-  // 404 → unknown NFC
   if (code == 404 && doc["detail"].is<String>()) {
     JsonDocument p;
     p["nfc_id"] = nfcId;
@@ -343,7 +317,6 @@ void processCard(const String& nfcId) {
     serializeJson(p, body);
     int pc = apiRequest("POST", "/pending-nfc", body);
     if (pc == 201 || pc == 409) {
-      Serial.println("Unknown card → pending submitted");
       startAnimation(ANIM_RAINBOW);
       showTemporaryScreen(SCREEN_UNKNOWN, "", 3000);
     } else {
@@ -352,39 +325,30 @@ void processCard(const String& nfcId) {
     return;
   }
 
-  if (code != 200) {
-    startAnimation(ANIM_PINK_BLINK);
-    return;
-  }
+  if (code != 200) { startAnimation(ANIM_PINK_BLINK); return; }
 
-  // Known member
   bool isPresent = doc["is_present"] | false;
   String firstName = doc["first_name"] | "";
-  bool safetyValid = doc["safety_briefing_valid"] | false;
 
   if (isPresent) {
-    // Check-out
     JsonDocument co;
     co["nfc_id"] = nfcId;
     String body;
     serializeJson(co, body);
     int c = apiRequest("POST", "/members/check-out", body, &response);
     if (c == 200) {
-      Serial.println("Checked out");
       startAnimation(ANIM_BLINK_RED);
       showTemporaryScreen(SCREEN_CHECKED_OUT, firstName, 5000);
     } else {
       startAnimation(ANIM_PINK_BLINK);
     }
   } else {
-    // Check-in (always allowed)
     JsonDocument ci;
     ci["nfc_id"] = nfcId;
     String body;
     serializeJson(ci, body);
     int c = apiRequest("POST", "/members/check-in", body, &response);
     if (c == 200) {
-      Serial.println("Checked in");
       startAnimation(ANIM_BLINK_GREEN);
       showTemporaryScreen(SCREEN_CHECKED_IN, firstName, 5000);
     } else {
@@ -399,37 +363,30 @@ void setup() {
   delay(200);
   Serial.println("\nMakerSpace NFC Terminal V2 starting...");
 
-  // WS2812B LED
   FastLED.addLeds<WS2812B, WS2812_PIN, GRB>(leds, WS2812_COUNT);
   FastLED.setBrightness(WS2812_MAX_BRIGHTNESS);
   setLed(CRGB::Purple);
   delay(500);
   ledOff();
 
-  // Display init
   tft.init();
   tft.setRotation(DISPLAY_ROTATION);
   tft.fillScreen(TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
 
-  // PN532 NFC (I2C)
   Wire.begin();
   nfc.begin();
-  if (nfc.getFirmwareVersion()) {
+  uint32_t versiondata = nfc.getFirmwareVersion();
+  if (versiondata) {
     Serial.printf("PN532 found, FW version: %d.%d\n",
-      (nfc.getFirmwareVersion() >> 24) & 0xFF,
-      (nfc.getFirmwareVersion() >> 16) & 0xFF);
+      (versiondata >> 24) & 0xFF, (versiondata >> 16) & 0xFF);
     nfc.SAMConfig();
   } else {
     Serial.println("PN532 not found!");
   }
 
   connectWifi();
-
-  // Draw idle screen
   drawIdleScreen();
-
-  // Synchronize time via NTP for clock display
   configTime(0, 0, "pool.ntp.org", "time.google.com");
   Serial.println("--- Ready ---");
 }
@@ -440,15 +397,12 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Update display if in temporary screen mode
   updateScreen();
 
-  // Refresh clock every 30s when idle
   if (screenState == SCREEN_IDLE && (now % 30000 < POLL_INTERVAL_MS)) {
     drawIdleScreen();
   }
 
-  // WiFi check
   checkWifiStatus();
 
   if (now < cardDebounceUntilMs) return;
