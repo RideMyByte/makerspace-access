@@ -8,8 +8,8 @@
     "variant": "esp32c6"
   },
   "connectivity": ["wifi"],
-  "frameworks": ["arduino", "espidf"],
-  "name": "Waveshare ESP32-C6 1.47inch (custom Arduino)",
+  "frameworks": ["espidf"],
+  "name": "Waveshare ESP32-C6 1.47inch (ESP-IDF)",
   "upload": {
     "flash_size": "4MB",
     "maximum_ram_size": 327680,

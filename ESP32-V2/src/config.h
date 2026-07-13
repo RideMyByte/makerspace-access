@@ -10,17 +10,26 @@
 #define API_KEY "udgw45z08awrjgsomng2p97sogjydggj4z"
 #define API_BASE "/api/v1"
 
-// ===== PN532 NFC (I2C) =====
-#define PN532_IRQ -1   // Not used
-#define PN532_RESET -1 // Not used
+// ===== I2C (PN532 NFC) =====
+#define I2C_SDA 19
+#define I2C_SCL 20
+#define PN532_I2C_ADDR 0x48  // 7-bit I2C address
 
-// ===== WS2812B =====
+// ===== WS2812B LED =====
 #define WS2812_PIN 8
 #define WS2812_COUNT 1
 #define WS2812_MAX_BRIGHTNESS 128
 
-// ===== Display =====
-#define DISPLAY_ROTATION 1  // Landscape: 320x172
+// ===== Display (ST7789V) =====
+#define DISPLAY_MOSI 4
+#define DISPLAY_SCLK 7
+#define DISPLAY_CS   6
+#define DISPLAY_DC   5
+#define DISPLAY_RST  3
+#define DISPLAY_BL   2
+#define DISPLAY_WIDTH  320   // Landscape: 320x172
+#define DISPLAY_HEIGHT 172
+#define DISPLAY_ROTATION 1
 
 // ===== Timing =====
 #define POLL_INTERVAL_MS 500
