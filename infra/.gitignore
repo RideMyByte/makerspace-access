@@ -1,3 +1,6 @@
 # PostgreSQL data directory – never commit actual database files
 infra/postgres/data/*
 !infra/postgres/data/.gitkeep
+
+# Environment variables – contains secrets (API keys, passwords, tokens)
+.env
