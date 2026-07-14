@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     api_key: str | None = Field(default=None, alias="API_KEY")
     registration_api_key: str | None = Field(default=None, alias="REGISTRATION_API_KEY")
+    web_api_key: str | None = Field(default=None, alias="WEB_API_KEY")
     logo_inverted: bool = Field(default=False, alias="LOGO_INVERTED")
     logo_url: str = Field(
         default="https://halle1wh.de/content/images/2023/04/cropped-RZ_Halle1_Logo_2018_schwarz-e1540384559756-2-150x150-1.png",

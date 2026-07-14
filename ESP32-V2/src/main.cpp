@@ -1,417 +1,481 @@
-#include <Arduino.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <Wire.h>
-#include <Adafruit_PN532.h>
-#include <TFT_eSPI.h>
-#include <FastLED.h>
+#include <stdio.h>
+#include <string.h>
+#include "esp_sntp.h"
+#include <time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "esp_log.h"
+#include "esp_err.h"
+#include "nvs_flash.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_http_client.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "driver/rmt_tx.h"
+#include "driver/spi_master.h"
+#include "esp_timer.h"
+#include "cJSON.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "vernon_st7789t.h"
 
 #include "config.h"
 
-// ===== Display =====
-TFT_eSPI tft = TFT_eSPI();
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern const uint8_t big_digits[11][40][3];
+#ifdef __cplusplus
+}
+#endif
 
-// ===== PN532 NFC (I2C) =====
-Adafruit_PN532 nfc = Adafruit_PN532(PN532_IRQ);
+extern "C" const uint8_t* get_char_bitmap(char c);
 
-// ===== LED =====
-CRGB leds[WS2812_COUNT];
+static const char *TAG = "MAIN";
+static esp_lcd_panel_handle_t panel_handle = NULL;
+static EventGroupHandle_t wifi_event_group;
+const int WIFI_CONNECTED_BIT = BIT0;
 
-// ===== Animation state =====
-enum AnimState : uint8_t {
-  ANIM_IDLE = 0,
-  ANIM_BLINK_GREEN,
-  ANIM_BLINK_RED,
-  ANIM_RAINBOW,
-  ANIM_PINK_BLINK,
-  ANIM_BLUE_BLINK,
-};
+// ===== LED (RMT-based WS2812B) =====
+static rmt_channel_handle_t led_rmt_chan = NULL;
+static rmt_encoder_handle_t led_encoder = NULL;
 
-AnimState currentAnim = ANIM_IDLE;
-unsigned long animStartMs = 0;
+static void led_init(void) {
+    rmt_tx_channel_config_t tx_chan_config;
+    memset(&tx_chan_config, 0, sizeof(tx_chan_config));
+    tx_chan_config.gpio_num = (gpio_num_t)8;
+    tx_chan_config.clk_src = RMT_CLK_SRC_DEFAULT;
+    tx_chan_config.mem_block_symbols = 64;
+    tx_chan_config.resolution_hz = 10 * 1000 * 1000;
+    tx_chan_config.trans_queue_depth = 1;
+    rmt_new_tx_channel(&tx_chan_config, &led_rmt_chan);
 
-// ===== UI state =====
-enum ScreenState : uint8_t {
-  SCREEN_IDLE,
-  SCREEN_CHECKED_IN,
-  SCREEN_CHECKED_OUT,
-  SCREEN_UNKNOWN,
-};
-
-ScreenState screenState = SCREEN_IDLE;
-String screenFirstName = "";
-unsigned long screenUntilMs = 0;
-
-// Timers
-unsigned long lastCardCheckMs = 0;
-unsigned long cardDebounceUntilMs = 0;
-unsigned long lastWifiCheckMs = 0;
-bool wifiWasConnected = false;
-
-// ===== LED helpers =====
-void startAnimation(AnimState anim) {
-  currentAnim = anim;
-  animStartMs = millis();
+    rmt_bytes_encoder_config_t encoder_cfg;
+    memset(&encoder_cfg, 0, sizeof(encoder_cfg));
+    encoder_cfg.bit0.duration0 = 3;
+    encoder_cfg.bit0.level0 = 1;
+    encoder_cfg.bit0.duration1 = 9;
+    encoder_cfg.bit0.level1 = 0;
+    encoder_cfg.bit1.duration0 = 7;
+    encoder_cfg.bit1.level0 = 1;
+    encoder_cfg.bit1.duration1 = 5;
+    encoder_cfg.bit1.level1 = 0;
+    rmt_new_bytes_encoder(&encoder_cfg, &led_encoder);
+    rmt_enable(led_rmt_chan);
 }
 
-void setLed(CRGB color, uint8_t brightness = WS2812_MAX_BRIGHTNESS) {
-  leds[0] = color;
-  leds[0].nscale8(brightness);
-  FastLED.show();
+static void led_set(uint8_t r, uint8_t g, uint8_t b) {
+    uint8_t grb[3] = {g, r, b};
+    rmt_transmit_config_t tx_config;
+    memset(&tx_config, 0, sizeof(tx_config));
+    tx_config.loop_count = 0;
+    rmt_transmit(led_rmt_chan, led_encoder, grb, 3, &tx_config);
 }
 
-void ledOff() {
-  leds[0] = CRGB::Black;
-  FastLED.show();
+static void led_off(void) { led_set(0, 0, 0); }
+
+// ===== State tracking =====
+static bool wifi_connected = false;
+static bool pn532_ok = false;
+static int64_t last_card_check_us = 0;
+static int64_t card_debounce_until_us = 0;
+
+// ===== Backlight =====
+static void bk_init(void) {
+    ledc_timer_config_t timer;
+    memset(&timer, 0, sizeof(timer));
+    timer.duty_resolution = LEDC_TIMER_13_BIT;
+    timer.freq_hz = 5000;
+    timer.speed_mode = LEDC_LOW_SPEED_MODE;
+    timer.timer_num = LEDC_TIMER_0;
+    timer.clk_cfg = LEDC_AUTO_CLK;
+    ledc_timer_config(&timer);
+    ledc_channel_config_t ch;
+    memset(&ch, 0, sizeof(ch));
+    ch.channel = LEDC_CHANNEL_0;
+    ch.duty = 0;
+    ch.gpio_num = (gpio_num_t)DISPLAY_BL;
+    ch.speed_mode = LEDC_LOW_SPEED_MODE;
+    ch.timer_sel = LEDC_TIMER_0;
+    ledc_channel_config(&ch);
 }
 
-void updateAnimation() {
-  unsigned long now = millis();
-  unsigned long elapsed = now - animStartMs;
+static void bk_light(uint8_t pct) {
+    if (pct > 100) pct = 100;
+    uint32_t max_duty = (1 << 13) - 1;
+    uint32_t duty = pct == 0 ? 0 : max_duty - (81 * (100 - pct));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
 
-  switch (currentAnim) {
-    case ANIM_IDLE: {
-      uint16_t cycle = now % 4000;
-      uint8_t brightness;
-      if (cycle < 2000) {
-        brightness = map(cycle, 0, 1999, 0, WS2812_MAX_BRIGHTNESS);
-      } else {
-        brightness = map(cycle, 2000, 3999, WS2812_MAX_BRIGHTNESS, 0);
-      }
-      setLed(CRGB::White, brightness);
-      break;
+// ===== Display init (using ESP-IDF LCD panel API from official demo) =====
+static void display_init(void) {
+    ESP_LOGI(TAG, "LCD init start");
+
+    esp_lcd_panel_io_handle_t io_handle = NULL;
+    esp_lcd_panel_io_spi_config_t io_config;
+    memset(&io_config, 0, sizeof(io_config));
+    io_config.dc_gpio_num = DISPLAY_DC;
+    io_config.cs_gpio_num = DISPLAY_CS;
+    io_config.pclk_hz = 12 * 1000 * 1000;
+    io_config.lcd_cmd_bits = 8;
+    io_config.lcd_param_bits = 8;
+    io_config.spi_mode = 0;
+    io_config.trans_queue_depth = 10;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &io_config, &io_handle));
+
+    // SPI bus for PN532 on same host – will be added later
+
+    esp_lcd_panel_dev_st7789t_config_t panel_config;
+    memset(&panel_config, 0, sizeof(panel_config));
+    panel_config.reset_gpio_num = DISPLAY_RST;
+    panel_config.rgb_endian = LCD_RGB_ENDIAN_BGR;
+    panel_config.bits_per_pixel = 16;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789t(io_handle, &panel_config, &panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
+    // Landscape 320x172: swap x/y, mirror both, gap on Y
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, false, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel_handle, 0, 34));
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+    bk_init();
+    bk_light(DISPLAY_BRIGHTNESS);
+    ESP_LOGI(TAG, "LCD init done (%d%%)", DISPLAY_BRIGHTNESS);
+}
+
+static void disp_fill_rect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t r, uint16_t g, uint16_t b) {
+    if (!panel_handle) return;
+    int w = x2 - x1 + 1, h = y2 - y1 + 1;
+    uint8_t *buf = (uint8_t *)malloc(w * h * 2);
+    if (buf) {
+        uint16_t color = ((r>>3)<<11) | ((g>>2)<<5) | (b>>3);
+        uint8_t hi = color>>8, lo = color&0xFF;
+        for (int i = 0; i < w * h; i++) { buf[i*2] = hi; buf[i*2+1] = lo; }
+        esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x1+w, y1+h, buf);
+        free(buf);
     }
-    case ANIM_BLINK_GREEN: {
-      if (elapsed >= 5000) { currentAnim = ANIM_IDLE; return; }
-      uint8_t phase = (elapsed / 150) % 2;
-      setLed(CRGB::Green, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
-      break;
+}
+
+static void disp_clear_black(void) {
+    if (!panel_handle) return;
+    // Use raw panel IO to clear the FULL framebuffer (240x320), bypassing gap
+    // The Vernon driver adds gap to draw_bitmap, so rows 0-33 are never written
+    // We need to send CASET=0..239, RASET=0..319 directly
+    esp_lcd_panel_io_handle_t io = NULL;
+    // We can access the IO via the panel handle's internal structure
+    // But we can't easily access it. Alternative: draw a rect that covers the gap
+    // by drawing at negative coordinates (which get shifted by gap into the correct range)
+    // Actually, set_gap first to 0, clear, then restore
+    esp_lcd_panel_set_gap(panel_handle, 0, 0);
+    int w = 320, h = 172;
+    uint8_t *buf = (uint8_t*)calloc(w * h, 2);
+    if (buf) {
+        esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, w, h, buf);
+        free(buf);
     }
-    case ANIM_BLINK_RED: {
-      if (elapsed >= 5000) { currentAnim = ANIM_IDLE; return; }
-      uint8_t phase = (elapsed / 150) % 2;
-      setLed(CRGB::Red, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
-      break;
+    esp_lcd_panel_set_gap(panel_handle, 0, 34);
+}
+
+static void disp_clear_rgb(uint8_t r, uint8_t g, uint8_t b) {
+    disp_fill_rect(0, 0, 319, 171, r, g, b);
+}
+
+// ===== Clock task =====
+static void clock_task(void *arg) {
+    int char_w = 24, char_h = 40, spacing = 4;
+    int total_w = 8*char_w + 7*spacing;
+    int start_x = 50, start_y = 66;
+    extern const uint8_t big_digits[11][40][3];
+    char last_time[10] = "";
+    while(1) {
+        time_t t; time(&t);
+        struct tm tm; localtime_r(&t, &tm);
+        char ts[9];
+        snprintf(ts, sizeof(ts), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+        if (strcmp(ts, last_time) != 0) {
+            strcpy(last_time, ts);
+            uint8_t *buf = (uint8_t*)calloc(total_w * char_h, 2);
+            if (buf) {
+                for (int ci = 0; ci < 8; ci++) {
+                    char c = ts[ci];
+                    int idx;
+                    if (c >= '0' && c <= '9') idx = c - '0';
+                    else if (c == ':') idx = 10;
+                    else continue;
+                    int xo = ci * (char_w + spacing);
+                    for (int r = 0; r < char_h; r++) {
+                        uint8_t d0 = big_digits[idx][r][0];
+                        uint8_t d1 = big_digits[idx][r][1];
+                        uint8_t d2 = big_digits[idx][r][2];
+                        for (int ci2 = 0; ci2 < char_w; ci2++) {
+                            int bi = ci2 / 8, bt = 7 - (ci2 % 8);
+                            int on = 0;
+                            if (bi == 0) on = (d0 >> bt) & 1;
+                            else if (bi == 1) on = (d1 >> bt) & 1;
+                            else on = (d2 >> bt) & 1;
+                            if (on) {
+                                int px = (r * total_w + (xo + ci2)) * 2;
+                                buf[px] = 0xFF; buf[px+1] = 0xFF;
+                            }
+                        }
+                    }
+                }
+                if (panel_handle) {
+                    esp_lcd_panel_draw_bitmap(panel_handle, start_x, start_y, start_x + total_w, start_y + char_h, buf);
+                }
+                free(buf);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
-    case ANIM_RAINBOW: {
-      if (elapsed >= 3000) { currentAnim = ANIM_IDLE; return; }
-      uint8_t hue = map(elapsed, 0, 3000, 0, 255);
-      setLed(CHSV(hue, 255, 255));
-      break;
+}
+
+// ===== PN532 (SPI) =====
+static spi_device_handle_t pn532_spi = NULL;
+
+static void pn532_init(void) {
+    printf("[PN532] SPI init...\n");
+
+    // SPI bus already initialized by display. Just add device.
+    spi_device_interface_config_t devcfg;
+    memset(&devcfg, 0, sizeof(devcfg));
+    devcfg.clock_speed_hz = 1 * 1000 * 1000; // 1MHz
+    devcfg.mode = 0;
+    devcfg.spics_io_num = PN532_CS;
+    devcfg.queue_size = 1;
+    devcfg.flags = SPI_DEVICE_HALFDUPLEX;
+
+    esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &pn532_spi);
+    printf("[PN532] SPI device add: %s\n", esp_err_to_name(ret));
+
+    if (ret != ESP_OK) {
+        pn532_ok = false;
+        return;
     }
-    case ANIM_PINK_BLINK: {
-      if (elapsed >= 8000) { currentAnim = ANIM_IDLE; return; }
-      uint8_t phase = (elapsed / 250) % 2;
-      setLed(CRGB(255, 20, 147), phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
-      break;
-    }
-    case ANIM_BLUE_BLINK: {
-      uint8_t phase = (elapsed / 250) % 2;
-      setLed(CRGB::Blue, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
-      break;
-    }
-  }
-}
 
-// ===== Display helpers =====
-void drawIdleScreen() {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    // PN532 SPI communication:
+    // Unlike normal SPI, PN532 uses "normal" SPI mode where CS must be held low
+    // during the entire transaction. We need to use SPI_DEVICE_HALFDUPLEX
+    // and manually control timing.
 
-  tft.setTextSize(3);
-  tft.drawCentreString("Hallo! :)", tft.width() / 2, 30, 4);
+    // Test: send a dummy byte with CS held low
+    uint8_t tx = 0x55;
+    uint8_t rx = 0;
+    spi_transaction_t t;
+    memset(&t, 0, sizeof(t));
+    t.length = 8;
+    t.tx_buffer = &tx;
+    t.rx_buffer = &rx;
+    ret = spi_device_transmit(pn532_spi, &t);
+    printf("[PN532] Test tx=0x55 rx=0x%02X: %s\n", rx, esp_err_to_name(ret));
 
-  tft.setTextSize(6);
-  struct tm timeinfo;
-  char timeStr[9];
-  if (getLocalTime(&timeinfo)) {
-    strftime(timeStr, sizeof(timeStr), "%H:%M", &timeinfo);
-  } else {
-    snprintf(timeStr, sizeof(timeStr), "--:--");
-  }
-  tft.drawCentreString(timeStr, tft.width() / 2, 85, 4);
-}
+    // PN532 SPI requires: write 0x00 to wake, then wait, then read status
+    // Then write command frame, wait, read response
+    // Let's try: send wake sequence
+    uint8_t wake_tx[16] = {0};
+    uint8_t wake_rx[16] = {0};
+    memset(&t, 0, sizeof(t));
+    t.length = 16*8;
+    t.tx_buffer = wake_tx;
+    t.rx_buffer = wake_rx;
+    ret = spi_device_transmit(pn532_spi, &t);
+    vTaskDelay(pdMS_TO_TICKS(10));
 
-void drawCheckinScreen(const String& firstName) {
-  tft.fillScreen(TFT_GREEN);
-  tft.setTextColor(TFT_WHITE, TFT_GREEN);
-  tft.setTextSize(4);
-  tft.drawCentreString(firstName, tft.width() / 2, 55, 4);
-}
+    // SamConfig: 0xD4 0x14 0x01 0x14 0x01
+    // SPI frame: write 0x00 (preamble), 0xFF (start), len, lcs, data, dcs, postamble
+    uint8_t sam[] = {0x00, 0xFF, 0x05, 0xFB, 0xD4, 0x14, 0x01, 0x14, 0x01, 0x17, 0x00};
+    memset(&t, 0, sizeof(t));
+    t.length = sizeof(sam) * 8;
+    t.tx_buffer = sam;
+    t.rx_buffer = wake_rx;
+    ret = spi_device_transmit(pn532_spi, &t);
+    printf("[PN532] SAMConfig: %s\n", esp_err_to_name(ret));
+    vTaskDelay(pdMS_TO_TICKS(20));
 
-void drawCheckoutScreen(const String& firstName) {
-  tft.fillScreen(TFT_RED);
-  tft.setTextColor(TFT_WHITE, TFT_RED);
-  tft.setTextSize(4);
-  tft.drawCentreString(firstName, tft.width() / 2, 30, 4);
-  tft.setTextSize(3);
-  tft.drawCentreString("Bye", tft.width() / 2, 90, 4);
-}
+    // Read response
+    uint8_t resp_tx[16] = {0xFF};
+    uint8_t resp_rx[16] = {0};
+    memset(&t, 0, sizeof(t));
+    t.length = 16*8;
+    t.tx_buffer = resp_tx;
+    t.rx_buffer = resp_rx;
+    ret = spi_device_transmit(pn532_spi, &t);
+    printf("[PN532] Response: ");
+    for (int i = 0; i < 16; i++) printf("%02X ", resp_rx[i]);
+    printf("\n");
 
-void drawUnknownScreen() {
-  tft.fillScreen(TFT_ORANGE);
-  tft.setTextColor(TFT_WHITE, TFT_ORANGE);
-  tft.setTextSize(3);
-  tft.drawCentreString("Neue ID", tft.width() / 2, 40, 4);
-  tft.drawCentreString("gescannt", tft.width() / 2, 85, 4);
-}
-
-void updateScreen() {
-  if (screenState != SCREEN_IDLE && millis() > screenUntilMs) {
-    screenState = SCREEN_IDLE;
-    drawIdleScreen();
-  }
-}
-
-void showTemporaryScreen(ScreenState state, const String& firstName, unsigned long durationMs) {
-  screenState = state;
-  screenFirstName = firstName;
-  screenUntilMs = millis() + durationMs;
-
-  switch (state) {
-    case SCREEN_CHECKED_IN: drawCheckinScreen(firstName); break;
-    case SCREEN_CHECKED_OUT: drawCheckoutScreen(firstName); break;
-    case SCREEN_UNKNOWN: drawUnknownScreen(); break;
-    default: break;
-  }
+    pn532_ok = false;
 }
 
 // ===== WiFi =====
-void connectWifi() {
-  Serial.printf("Connecting to WiFi \"%s\"...\n", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(100);
-    uint8_t phase = (millis() / 250) % 2;
-    setLed(CRGB::Blue, phase == 0 ? WS2812_MAX_BRIGHTNESS : 0);
-    if (millis() - start > 30000) {
-      Serial.println("\nWiFi connection timeout!");
-      break;
+static void wifi_evt(void*a,esp_event_base_t b,int32_t id,void*d){
+    if(b==WIFI_EVENT&&id==WIFI_EVENT_STA_START)esp_wifi_connect();
+    else if(b==WIFI_EVENT&&id==WIFI_EVENT_STA_DISCONNECTED){wifi_connected=false;esp_wifi_connect();}
+    else if(b==IP_EVENT&&id==IP_EVENT_STA_GOT_IP){
+        ip_event_got_ip_t*e=(ip_event_got_ip_t*)d;
+        printf("[WiFi] IP: "IPSTR"\n",IP2STR(&e->ip_info.ip));
+        wifi_connected=true;xEventGroupSetBits(wifi_event_group,WIFI_CONNECTED_BIT);
     }
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nWiFi connected. IP: %s\n", WiFi.localIP().toString().c_str());
-    wifiWasConnected = true;
-  }
 }
 
-void checkWifiStatus() {
-  unsigned long now = millis();
-  if (now - lastWifiCheckMs < 2000) return;
-  lastWifiCheckMs = now;
-
-  if (WiFi.status() != WL_CONNECTED) {
-    if (currentAnim == ANIM_IDLE || currentAnim == ANIM_BLUE_BLINK) {
-      startAnimation(ANIM_BLUE_BLINK);
-    }
-    if (wifiWasConnected) {
-      Serial.println("WiFi lost, reconnecting...");
-      wifiWasConnected = false;
-      WiFi.reconnect();
-    }
-  } else {
-    if (currentAnim == ANIM_BLUE_BLINK) currentAnim = ANIM_IDLE;
-    wifiWasConnected = true;
-  }
+static void wifi_init(void){
+    wifi_event_group=xEventGroupCreate();
+    esp_netif_init();esp_event_loop_create_default();esp_netif_create_default_wifi_sta();
+    wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT();esp_wifi_init(&cfg);
+    esp_event_handler_instance_register(WIFI_EVENT,ESP_EVENT_ANY_ID,&wifi_evt,NULL,NULL);
+    esp_event_handler_instance_register(IP_EVENT,IP_EVENT_STA_GOT_IP,&wifi_evt,NULL,NULL);
+    wifi_config_t wc;memset(&wc,0,sizeof(wc));
+    memcpy(wc.sta.ssid,WIFI_SSID,strlen(WIFI_SSID));
+    memcpy(wc.sta.password,WIFI_PASSWORD,strlen(WIFI_PASSWORD));
+    wc.sta.threshold.authmode=WIFI_AUTH_WPA2_PSK;
+    esp_wifi_set_mode(WIFI_MODE_STA);esp_wifi_set_config(WIFI_IF_STA,&wc);esp_wifi_start();
 }
 
-// ===== HTTP helpers =====
-String buildUrl(const String& path) {
-  String url = "http://";
-  url += API_HOST;
-  url += ":";
-  url += API_PORT;
-  url += API_BASE;
-  url += path;
-  return url;
+// ===== HTTP =====
+typedef struct{int code;char*b;size_t l;}http_r;
+static esp_err_t http_evt(esp_http_client_event_t*e){
+    http_r*r=(http_r*)e->user_data;
+    if(e->event_id==HTTP_EVENT_ON_DATA){
+        if(!r->b){size_t t=esp_http_client_get_content_length(e->client);if(t<=0)t=4096;r->b=(char*)malloc(t+1);r->l=0;}
+        if(r->b){size_t s=esp_http_client_get_content_length(e->client);if(s<=0)s=4096;
+            size_t rem=s-r->l;if(rem>e->data_len)rem=e->data_len;
+            memcpy(r->b+r->l,e->data,rem);r->l+=rem;r->b[r->l]=0;}
+    }else if(e->event_id==HTTP_EVENT_ON_FINISH)r->code=esp_http_client_get_status_code(e->client);
+    return ESP_OK;
+}
+static int api(const char*m,const char*p,const char*b,http_r*r){
+    if(!wifi_connected)return -1;
+    char u[256];snprintf(u,sizeof(u),"http://%s:%d%s%s",API_HOST,API_PORT,API_BASE,p);
+    esp_http_client_config_t c;memset(&c,0,sizeof(c));
+    c.url=u;c.method=strcmp(m,"POST")==0?HTTP_METHOD_POST:HTTP_METHOD_GET;
+    c.event_handler=http_evt;c.user_data=r;c.timeout_ms=HTTP_TIMEOUT_MS;
+    esp_http_client_handle_t h=esp_http_client_init(&c);
+    esp_http_client_set_header(h,"X-API-Key",API_KEY);
+    if(b&&strlen(b)){esp_http_client_set_header(h,"Content-Type","application/json");esp_http_client_set_post_field(h,b,strlen(b));}
+    r->b=NULL;r->l=0;r->code=0;
+    esp_http_client_perform(h);int co=r->code;
+    esp_http_client_cleanup(h);return co;
 }
 
-int apiRequest(const String& method, const String& path, const String& jsonBody = "", String* response = nullptr) {
-  if (WiFi.status() != WL_CONNECTED) return -1;
-
-  HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.begin(buildUrl(path));
-  http.addHeader("X-API-Key", API_KEY);
-
-  int code = 0;
-  if (method == "GET") {
-    code = http.GET();
-  } else if (method == "POST") {
-    if (jsonBody.length() > 0) {
-      http.addHeader("Content-Type", "application/json");
-      code = http.POST(jsonBody);
-    } else {
-      code = http.POST("");
+// ===== Process card =====
+static void process_card(const char*nfc){
+    printf("[CARD] %s\n",nfc);
+    if(!wifi_connected)return;
+    char p[128];snprintf(p,sizeof(p),"/members/nfc/%s",nfc);http_r r;int co=api("GET",p,NULL,&r);
+    if(co<=0||co==401){if(r.b)free(r.b);return;}
+    if(co==404&&r.b){
+        cJSON*j=cJSON_Parse(r.b);const char*d="";
+        if(j){cJSON*di=cJSON_GetObjectItem(j,"detail");if(di)d=di->valuestring;}
+        if(!d[0]||strstr(d,"not found")||strstr(d,"Unknown")){
+            cJSON*po=cJSON_CreateObject();cJSON_AddStringToObject(po,"nfc_id",nfc);
+            char*bd=cJSON_PrintUnformatted(po);http_r pr;int pc=api("POST","/pending-nfc",bd,&pr);
+            cJSON_free(bd);cJSON_Delete(po);if(pr.b)free(pr.b);if(j)cJSON_Delete(j);if(r.b)free(r.b);return;
+        }if(j)cJSON_Delete(j);
     }
-  } else {
-    http.end();
-    return 0;
-  }
-
-  if (code > 0) {
-    if (response) *response = http.getString();
-  } else {
-    Serial.printf("HTTP %s %s failed: %s\n", method.c_str(), path.c_str(), http.errorToString(code).c_str());
-  }
-  http.end();
-  return code;
-}
-
-// ===== NFC (PN532) =====
-bool readNfcId(String& outUid) {
-  uint8_t uid[7];
-  uint8_t uidLen;
-
-  if (!nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen, 50)) {
-    return false;
-  }
-
-  String uidStr;
-  for (uint8_t i = 0; i < uidLen; i++) {
-    if (uid[i] < 0x10) uidStr += "0";
-    uidStr += String(uid[i], HEX);
-  }
-  uidStr.toUpperCase();
-
-  // Wait for card removal
-  while (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLen, 50)) {
-    delay(50);
-  }
-
-  outUid = uidStr;
-  return true;
-}
-
-// ===== Process NFC =====
-void processCard(const String& nfcId) {
-  Serial.printf("Card: %s\n", nfcId.c_str());
-
-  if (WiFi.status() != WL_CONNECTED) {
-    startAnimation(ANIM_BLUE_BLINK);
-    return;
-  }
-
-  String path = "/members/nfc/";
-  path += nfcId;
-  String response;
-  int code = apiRequest("GET", path, "", &response);
-
-  if (code <= 0 || code == 401 || response.length() == 0) {
-    startAnimation(ANIM_PINK_BLINK);
-    return;
-  }
-
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, response);
-  if (error) { startAnimation(ANIM_PINK_BLINK); return; }
-
-  if (code == 404 && doc["detail"].is<String>()) {
-    JsonDocument p;
-    p["nfc_id"] = nfcId;
-    String body;
-    serializeJson(p, body);
-    int pc = apiRequest("POST", "/pending-nfc", body);
-    if (pc == 201 || pc == 409) {
-      startAnimation(ANIM_RAINBOW);
-      showTemporaryScreen(SCREEN_UNKNOWN, "", 3000);
-    } else {
-      startAnimation(ANIM_PINK_BLINK);
+    if(co!=200||!r.b){if(r.b)free(r.b);return;}
+    cJSON*j=cJSON_Parse(r.b);if(!j){free(r.b);return;}
+    bool sv=false,ip=false;const char*n="";
+    cJSON*it=cJSON_GetObjectItem(j,"safety_briefing_valid");if(it)sv=it->valuedouble!=0;
+    it=cJSON_GetObjectItem(j,"is_present");if(it)ip=it->valuedouble!=0;
+    it=cJSON_GetObjectItem(j,"first_name");if(it&&it->valuestring)n=it->valuestring;
+    if(!n||!*n){it=cJSON_GetObjectItem(j,"name");if(it&&it->valuestring)n=it->valuestring;}
+    if(!n)n="";
+    if(ip){
+        cJSON*coj=cJSON_CreateObject();cJSON_AddStringToObject(coj,"nfc_id",nfc);
+        char*bd=cJSON_PrintUnformatted(coj);http_r cr;int c=api("POST","/members/check-out",bd,&cr);
+        cJSON_free(bd);cJSON_Delete(coj);if(cr.b)free(cr.b);
+    }else{
+        cJSON*cij=cJSON_CreateObject();cJSON_AddStringToObject(cij,"nfc_id",nfc);
+        char*bd=cJSON_PrintUnformatted(cij);http_r cr;int c=api("POST","/members/check-in",bd,&cr);
+        cJSON_free(bd);cJSON_Delete(cij);if(cr.b)free(cr.b);
     }
-    return;
-  }
-
-  if (code != 200) { startAnimation(ANIM_PINK_BLINK); return; }
-
-  bool isPresent = doc["is_present"] | false;
-  String firstName = doc["first_name"] | "";
-
-  if (isPresent) {
-    JsonDocument co;
-    co["nfc_id"] = nfcId;
-    String body;
-    serializeJson(co, body);
-    int c = apiRequest("POST", "/members/check-out", body, &response);
-    if (c == 200) {
-      startAnimation(ANIM_BLINK_RED);
-      showTemporaryScreen(SCREEN_CHECKED_OUT, firstName, 5000);
-    } else {
-      startAnimation(ANIM_PINK_BLINK);
-    }
-  } else {
-    JsonDocument ci;
-    ci["nfc_id"] = nfcId;
-    String body;
-    serializeJson(ci, body);
-    int c = apiRequest("POST", "/members/check-in", body, &response);
-    if (c == 200) {
-      startAnimation(ANIM_BLINK_GREEN);
-      showTemporaryScreen(SCREEN_CHECKED_IN, firstName, 5000);
-    } else {
-      startAnimation(ANIM_PINK_BLINK);
-    }
-  }
+    cJSON_Delete(j);free(r.b);
 }
 
-// ===== Setup =====
-void setup() {
-  Serial.begin(115200);
-  delay(200);
-  Serial.println("\nMakerSpace NFC Terminal V2 starting...");
+// ===== Main =====
+extern "C" void app_main(void) {
+    printf("[MAIN] Starting...\n");
 
-  FastLED.addLeds<WS2812B, WS2812_PIN, GRB>(leds, WS2812_COUNT);
-  FastLED.setBrightness(WS2812_MAX_BRIGHTNESS);
-  setLed(CRGB::Purple);
-  delay(500);
-  ledOff();
+    // Wait 2s for serial monitor connection
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
-  tft.init();
-  tft.setRotation(DISPLAY_ROTATION);
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextDatum(MC_DATUM);
+    esp_err_t ret=nvs_flash_init();
+    if(ret==ESP_ERR_NVS_NO_FREE_PAGES||ret==ESP_ERR_NVS_NEW_VERSION_FOUND){nvs_flash_erase();nvs_flash_init();}
 
-  Wire.begin();
-  nfc.begin();
-  uint32_t versiondata = nfc.getFirmwareVersion();
-  if (versiondata) {
-    Serial.printf("PN532 found, FW version: %d.%d\n",
-      (versiondata >> 24) & 0xFF, (versiondata >> 16) & 0xFF);
-    nfc.SAMConfig();
-  } else {
-    Serial.println("PN532 not found!");
-  }
+    // SPI bus (must be before LCD)
+    spi_bus_config_t b;memset(&b,0,sizeof(b));
+    b.mosi_io_num=DISPLAY_MOSI;b.miso_io_num=-1;b.sclk_io_num=DISPLAY_SCLK;b.max_transfer_sz=172*320*2;
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST,&b,SPI_DMA_CH_AUTO));
 
-  connectWifi();
-  drawIdleScreen();
-  configTime(0, 0, "pool.ntp.org", "time.google.com");
-  Serial.println("--- Ready ---");
-}
+    // Display
+    display_init();
 
-// ===== Loop =====
-void loop() {
-  updateAnimation();
+    // LED
+    led_init();
 
-  unsigned long now = millis();
+    // LED quick test (purple then off)
+    printf("[LED] Quick test\n");
+    led_set(128,0,128); vTaskDelay(pdMS_TO_TICKS(300));
+    led_off();
 
-  updateScreen();
+    // Display: clear to black immediately
+    disp_clear_rgb(0, 0, 0);
 
-  if (screenState == SCREEN_IDLE && (now % 30000 < POLL_INTERVAL_MS)) {
-    drawIdleScreen();
-  }
+    // PN532
+    pn532_init();
 
-  checkWifiStatus();
+    // WiFi + SNTP time sync
+    wifi_init();
 
-  if (now < cardDebounceUntilMs) return;
-  if (now - lastCardCheckMs < POLL_INTERVAL_MS) return;
-  lastCardCheckMs = now;
+    // Wait for WiFi + sync time
+    xEventGroupWaitBits(wifi_event_group,WIFI_CONNECTED_BIT,false,true,pdMS_TO_TICKS(15000));
 
-  String nfcId;
-  if (!readNfcId(nfcId)) return;
-  if (nfcId.length() == 0) return;
+    if(wifi_connected){
+        http_r hr;int h=api("GET","/health",NULL,&hr);
+        printf("[API] Health:%d\n",h);if(hr.b)free(hr.b);
 
-  processCard(nfcId);
-  cardDebounceUntilMs = millis() + DEBOUNCE_MS;
+        // Initialize SNTP for time sync
+        printf("[SNTP] Syncing time...\n");
+        esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+        esp_sntp_setservername(0, "pool.ntp.org");
+        esp_sntp_init();
+        // Wait for time sync
+        time_t now = 0;
+        struct tm tm;
+        int retry = 0;
+        while (tm.tm_year < (2024 - 1900) && ++retry < 20) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            time(&now);
+            localtime_r(&now, &tm);
+        }
+        printf("[SNTP] Time synced: %s", asctime(&tm));
+        // Set timezone to Europe/Berlin (CEST)
+        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+        tzset();
+        printf("[SNTP] Timezone set to Europe/Berlin\n");
+    }
+
+    printf("[MAIN] Ready. Starting clock task...\n");
+
+    // Draw black background
+    disp_clear_black();
+
+    // Start clock task (independent, checks every 500ms, updates when changed)
+    xTaskCreate(clock_task, "clock", 4096, NULL, 5, NULL);
+
+    while(1){
+        // LED white pulsating
+        uint32_t cycle = (esp_timer_get_time()/1000) % 4000;
+        uint8_t b = cycle<2000?(cycle*255)/1999:255-((cycle-2000)*255)/1999;
+        led_set(b, b, b);
+
+        int64_t now=esp_timer_get_time();
+        if(now<card_debounce_until_us||now-last_card_check_us<500000){vTaskDelay(10);continue;}
+        last_card_check_us=now;
+        vTaskDelay(100);
+    }
 }

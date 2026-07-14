@@ -22,6 +22,9 @@ def require_api_key(
     if provided_api_key == settings.registration_api_key:
         return provided_api_key
 
+    if settings.web_api_key and provided_api_key == settings.web_api_key:
+        return provided_api_key
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or missing API key",

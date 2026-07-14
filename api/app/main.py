@@ -14,6 +14,7 @@ from app.routes.registration import router as registration_router
 from app.routes.scan_history import router as scan_history_router
 from app.routes.ui_config import router as ui_config_router
 from app.routes.users import router as users_router
+from app.routes.web import router as web_router
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -83,8 +84,9 @@ app.include_router(health_router)
 app.include_router(health_router, prefix=settings.api_v1_prefix)
 app.include_router(members_router, prefix=settings.api_v1_prefix)
 app.include_router(pending_nfc_router, prefix=settings.api_v1_prefix)
-app.include_router(registration_router, prefix=settings.api_v1_prefix)
+app.include_router(ui_config_router, prefix=settings.api_v1_prefix)
 app.include_router(users_router, prefix=settings.api_v1_prefix)
+app.include_router(web_router, prefix=settings.api_v1_prefix)
 app.include_router(scan_history_router, prefix=settings.api_v1_prefix)
 app.include_router(ui_config_router, prefix=settings.api_v1_prefix)
 
