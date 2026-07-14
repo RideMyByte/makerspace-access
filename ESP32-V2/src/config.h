@@ -37,13 +37,10 @@
 // See: https://docs.waveshare.com/ESP32-C6-LCD-1.47
 #define DISPLAY_BRIGHTNESS 50
 
-// ===== PN532 (SPI) =====
-#define PN532_SPI_HOST    SPI2_HOST
-#define PN532_MOSI        (gpio_num_t)9
-#define PN532_MISO        (gpio_num_t)18
-#define PN532_SCLK        (gpio_num_t)19
-#define PN532_CS          (gpio_num_t)20
-#define PN532_I2C_ADDR 0x24
+// ===== PN532 (UART/HSU) =====
+#define PN532_UART_TX      (gpio_num_t)12
+#define PN532_UART_RX      (gpio_num_t)13
+#define PN532_UART_PORT    UART_NUM_1
 
 // ===== Timing =====
 #define POLL_INTERVAL_MS  500

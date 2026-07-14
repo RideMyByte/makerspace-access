@@ -234,81 +234,41 @@ static void clock_task(void *arg) {
     }
 }
 
-// ===== PN532 (SPI) =====
-static spi_device_handle_t pn532_spi = NULL;
+// ===== PN532 (using garag/esp-idf-pn532 library, HSU/UART) =====
+#include "pn532_driver.h"
+#include "pn532_driver_hsu.h"
+#include "pn532.h"
+
+static pn532_io_t pn532_io;
 
 static void pn532_init(void) {
-    printf("[PN532] SPI init...\n");
+    printf("[PN532] Initializing with HSU/UART driver...\n");
+    memset(&pn532_io, 0, sizeof(pn532_io));
 
-    // SPI bus already initialized by display. Just add device.
-    spi_device_interface_config_t devcfg;
-    memset(&devcfg, 0, sizeof(devcfg));
-    devcfg.clock_speed_hz = 1 * 1000 * 1000; // 1MHz
-    devcfg.mode = 0;
-    devcfg.spics_io_num = PN532_CS;
-    devcfg.queue_size = 1;
-    devcfg.flags = SPI_DEVICE_HALFDUPLEX;
+    esp_err_t err = pn532_new_driver_hsu(
+        PN532_UART_RX, PN532_UART_TX,
+        GPIO_NUM_NC,  // no reset pin
+        GPIO_NUM_NC,  // no IRQ pin
+        PN532_UART_PORT,
+        115200,
+        &pn532_io
+    );
+    printf("[PN532] new_driver_hsu: %s\n", esp_err_to_name(err));
+    if (err != ESP_OK) { pn532_ok = false; return; }
 
-    esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &pn532_spi);
-    printf("[PN532] SPI device add: %s\n", esp_err_to_name(ret));
+    err = pn532_init(&pn532_io);
+    printf("[PN532] init: %s\n", esp_err_to_name(err));
+    if (err != ESP_OK) { pn532_ok = false; return; }
 
-    if (ret != ESP_OK) {
+    uint32_t fw = 0;
+    err = pn532_get_firmware_version(&pn532_io, &fw);
+    if (err == ESP_OK) {
+        printf("[PN532] Firmware: %lu.%lu\n", (fw >> 24) & 0xFF, (fw >> 16) & 0xFF);
+        pn532_ok = true;
+    } else {
+        printf("[PN532] Firmware read failed: %s\n", esp_err_to_name(err));
         pn532_ok = false;
-        return;
     }
-
-    // PN532 SPI communication:
-    // Unlike normal SPI, PN532 uses "normal" SPI mode where CS must be held low
-    // during the entire transaction. We need to use SPI_DEVICE_HALFDUPLEX
-    // and manually control timing.
-
-    // Test: send a dummy byte with CS held low
-    uint8_t tx = 0x55;
-    uint8_t rx = 0;
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.length = 8;
-    t.tx_buffer = &tx;
-    t.rx_buffer = &rx;
-    ret = spi_device_transmit(pn532_spi, &t);
-    printf("[PN532] Test tx=0x55 rx=0x%02X: %s\n", rx, esp_err_to_name(ret));
-
-    // PN532 SPI requires: write 0x00 to wake, then wait, then read status
-    // Then write command frame, wait, read response
-    // Let's try: send wake sequence
-    uint8_t wake_tx[16] = {0};
-    uint8_t wake_rx[16] = {0};
-    memset(&t, 0, sizeof(t));
-    t.length = 16*8;
-    t.tx_buffer = wake_tx;
-    t.rx_buffer = wake_rx;
-    ret = spi_device_transmit(pn532_spi, &t);
-    vTaskDelay(pdMS_TO_TICKS(10));
-
-    // SamConfig: 0xD4 0x14 0x01 0x14 0x01
-    // SPI frame: write 0x00 (preamble), 0xFF (start), len, lcs, data, dcs, postamble
-    uint8_t sam[] = {0x00, 0xFF, 0x05, 0xFB, 0xD4, 0x14, 0x01, 0x14, 0x01, 0x17, 0x00};
-    memset(&t, 0, sizeof(t));
-    t.length = sizeof(sam) * 8;
-    t.tx_buffer = sam;
-    t.rx_buffer = wake_rx;
-    ret = spi_device_transmit(pn532_spi, &t);
-    printf("[PN532] SAMConfig: %s\n", esp_err_to_name(ret));
-    vTaskDelay(pdMS_TO_TICKS(20));
-
-    // Read response
-    uint8_t resp_tx[16] = {0xFF};
-    uint8_t resp_rx[16] = {0};
-    memset(&t, 0, sizeof(t));
-    t.length = 16*8;
-    t.tx_buffer = resp_tx;
-    t.rx_buffer = resp_rx;
-    ret = spi_device_transmit(pn532_spi, &t);
-    printf("[PN532] Response: ");
-    for (int i = 0; i < 16; i++) printf("%02X ", resp_rx[i]);
-    printf("\n");
-
-    pn532_ok = false;
 }
 
 // ===== WiFi =====
