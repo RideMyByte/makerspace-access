@@ -1,0 +1,3 @@
+# .pio build artifacts
+.pio/
+sdkconfig
